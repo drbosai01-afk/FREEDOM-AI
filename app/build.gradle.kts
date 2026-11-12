@@ -1,0 +1,27 @@
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}
+android {
+    namespace = "ai.freedom.app"
+    compileSdk = 35
+
+    defaultConfig {
+        applicationId = "ai.freedom.app"
+        minSdk = 26
+        targetSdk = 35
+        versionCode = 2
+        versionName = "0.2.0"
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+}
+dependencies {
+    implementation(project(":core"))
+    testImplementation("junit:junit:4.13.2")
+}
