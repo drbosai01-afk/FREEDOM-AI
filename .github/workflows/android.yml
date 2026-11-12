@@ -20,12 +20,15 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
+      # GitHub Ubuntu runners include Android SDK command-line tools.
+      # setup-android@v3 currently fails while requesting removed SDK package "tools".
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
       - name: Install Android SDK 35
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
       - name: Run tests and build
         run: gradle :core:test :app:assembleDebug --no-daemon --stacktrace
       - name: Upload debug APK
