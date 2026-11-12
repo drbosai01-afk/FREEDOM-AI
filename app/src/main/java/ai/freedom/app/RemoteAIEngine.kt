@@ -7,6 +7,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.io.ByteArrayOutputStream
 
 /**
  * Optional remote inference. Credential only lives in RAM and is not logged.
@@ -70,11 +71,17 @@ class RemoteAIEngine(
             } else {
                 // Never buffer an unbounded upstream response into device memory.
                 val response = connection.inputStream.use { stream ->
-                    val bytes = stream.readNBytes(262145)
-                    if (bytes.size > 262144) {
-                        return AIResponse.Unavailable("Слишком большой ответ сервера")
+                    val output = ByteArrayOutputStream()
+                    val buffer = ByteArray(8192)
+                    while (true) {
+                        val n = stream.read(buffer)
+                        if (n < 0) break
+                        if (output.size() + n > 262144) {
+                            return AIResponse.Unavailable("Слишком большой ответ сервера")
+                        }
+                        output.write(buffer, 0, n)
                     }
-                    bytes.toString(Charsets.UTF_8)
+                    output.toString("UTF-8")
                 }
                 val reply = JSONObject(response)
                     .getJSONArray("choices")
