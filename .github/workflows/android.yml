@@ -34,6 +34,24 @@ jobs:
           "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
       - name: Run tests and build
         run: gradle :core:test :app:assembleDebug --no-daemon --stacktrace
+      - name: Verify APK permissions and record digest
+        run: |
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          AAPT="$SDK_ROOT/build-tools/35.0.0/aapt"
+          APKSIGNER="$SDK_ROOT/build-tools/35.0.0/apksigner"
+          test -x "$AAPT"
+          test -x "$APKSIGNER"
+          "$APKSIGNER" verify --verbose "$APK"
+          "$AAPT" dump permissions "$APK" | tee /tmp/freedom-permissions.txt
+          # The current prototype must only declare INTERNET.
+          grep -F 'android.permission.INTERNET' /tmp/freedom-permissions.txt
+          if grep -E 'android.permission.(READ_|WRITE_|MANAGE_|BIND_|RECORD_AUDIO|CAMERA|QUERY_ALL_PACKAGES|ACCESSIBILITY)' /tmp/freedom-permissions.txt; then
+            echo "Unexpected sensitive permission in APK" >&2
+            exit 1
+          fi
+          sha256sum "$APK"
       - name: Upload debug APK
         if: success()
         uses: actions/upload-artifact@v4
