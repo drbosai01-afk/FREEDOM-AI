@@ -9,10 +9,8 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * OpenAI-compatible chat-completions HTTPS adapter.
- * This is an optional remote AI provider, NOT an on-device model.
- * Credentials are held in memory only and never written to app storage or logs.
- * Must be called from a worker thread.
+ * Optional remote inference. Credential only lives in RAM and is not logged.
+ * Network access is triggered solely by a confirmed user message.
  */
 class RemoteAIEngine(
     endpoint: String,
@@ -29,6 +27,7 @@ class RemoteAIEngine(
         require(parsed.host.isNotBlank() && parsed.userInfo == null && parsed.query == null && parsed.ref == null) {
             "Некорректный адрес сервера"
         }
+        require(parsed.port == -1 || parsed.port == 443) { "Только стандартный HTTPS-порт 443" }
         require(modelId.isNotBlank() && modelId.length <= 128) { "Укажи модель" }
         require(apiKey.isNotBlank()) { "Укажи API-ключ" }
         url = parsed
@@ -37,6 +36,7 @@ class RemoteAIEngine(
     override fun generate(history: List<ChatMessage>): AIResponse {
         var connection: HttpURLConnection? = null
         return try {
+            require(history.size <= 100) { "Слишком длинный диалог" }
             val body = JSONObject().apply {
                 put("model", modelId)
                 put("messages", JSONArray().apply {
@@ -49,6 +49,9 @@ class RemoteAIEngine(
                 })
                 put("max_tokens", 512)
             }.toString()
+            if (body.toByteArray(Charsets.UTF_8).size > 65536) {
+                return AIResponse.Unavailable("Слишком длинный диалог. Перезапусти приложение для очистки истории.")
+            }
 
             connection = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
@@ -63,22 +66,27 @@ class RemoteAIEngine(
             connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             val status = connection.responseCode
             if (status !in 200..299) {
-                // Do not display raw server errors, which may contain sensitive content.
                 AIResponse.Unavailable("Сервер вернул HTTP $status. Проверь адрес, модель и ключ.")
             } else {
-                val response = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-                val text = JSONObject(response)
+                // Never buffer an unbounded upstream response into device memory.
+                val response = connection.inputStream.use { stream ->
+                    val bytes = stream.readNBytes(262145)
+                    if (bytes.size > 262144) {
+                        return AIResponse.Unavailable("Слишком большой ответ сервера")
+                    }
+                    bytes.toString(Charsets.UTF_8)
+                }
+                val reply = JSONObject(response)
                     .getJSONArray("choices")
                     .getJSONObject(0)
                     .getJSONObject("message")
                     .optString("content", "")
                     .trim()
-                if (text.isEmpty()) AIResponse.Unavailable("Модель не вернула текст")
-                else AIResponse.Reply(text)
+                if (reply.isEmpty()) AIResponse.Unavailable("Модель не вернула текст")
+                else AIResponse.Reply(reply)
             }
         } catch (_: Exception) {
-            // No keys, prompts, URLs or stack traces in error messages.
-            AIResponse.Unavailable("Не удалось связаться с моделью. Проверь интернет и настройки.")
+            AIResponse.Unavailable("Не удалось выполнить запрос. Проверь интернет, настройки и длину диалога.")
         } finally {
             connection?.disconnect()
         }
