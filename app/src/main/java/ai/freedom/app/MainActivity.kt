@@ -147,8 +147,8 @@ class MainActivity : Activity() {
                     engine = next
                     remoteConsent = true
                     history.clear()
-                    statusLabel.text = "ИИ: ${next.name} • Сеть включена"
-                    append("FREEDOM: Модель настроена. Теперь отправь сообщение для проверки.")
+                    statusLabel.text = "ИИ настроен: ${next.name} • ответ ещё не проверен"
+                    append("FREEDOM: Настройки сохранены только в памяти. Напиши «Привет», чтобы проверить настоящий ответ сервера.")
                 } catch (_: Exception) {
                     Toast.makeText(this, "Проверь HTTPS-адрес, модель и API-ключ", Toast.LENGTH_LONG).show()
                 } finally {
@@ -190,10 +190,12 @@ class MainActivity : Activity() {
                 }
                 when (result) {
                     is AIResponse.Reply -> {
+                        statusLabel.text = "ИИ работает: ${selectedEngine.name}"
                         append("FREEDOM: ${result.text}")
                         history.add(ChatMessage(ChatMessage.Role.ASSISTANT, result.text))
                     }
                     is AIResponse.Unavailable -> {
+                        statusLabel.text = "Не удалось подтвердить работу ИИ • проверь настройки"
                         append("FREEDOM: ${result.reason}")
                         // Failed messages are not retained in conversation history.
                         if (history.isNotEmpty()) history.removeAt(history.lastIndex)
