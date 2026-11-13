@@ -617,3 +617,33 @@ def health():
                          "schema_up_to_date": migration_ready,
                          "email_ready": bool(smtp_ready), "https_configured": bool(https_ready)},
                         status_code=200 if ready else 503, headers={"Cache-Control": "no-store"})
+
+
+# Production surface checks: never expose an API backed by an unmigrated database.
+from sqlalchemy import text as sql_text
+from urllib.parse import urlsplit
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+
+if ENVIRONMENT == "production":
+    public_base = os.getenv("PUBLIC_BASE_URL", "")
+    parsed = urlsplit(public_base)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise RuntimeError("PUBLIC_BASE_URL must be an HTTPS origin")
+    # Deployment hostnames are created by Vercel and are not manually adjustable.
+    app.add_middleware(TrustedHostMiddleware,
+                       allowed_hosts=[parsed.hostname, "*.vercel.app"])
+
+@app.middleware("http")
+async def secure_http_responses(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if ENVIRONMENT == "production":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
+    return response
+
