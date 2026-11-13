@@ -36,3 +36,23 @@ def test_login_validation():
     assert client.post("/api/login", json={"email": email, "password": "wrong_password_111"}).status_code == 401
     assert client.post("/api/login", json={"email": email, "password": "secure_password_2026"}).status_code == 200
     assert client.get("/api/records/wrong", headers=account("d_"+uuid.uuid4().hex+"@example.com")).status_code == 422
+
+def test_catalog_import_scoped_deduplicated_and_atomic():
+    a = account("import_a_" + uuid.uuid4().hex + "@example.com")
+    b = account("import_b_" + uuid.uuid4().hex + "@example.com")
+    item = {"record_id": "legacy_catalog_0001", "data": {
+        "title": "ЖК Тест", "address": "Краснодар", "price": "4000000", "source": "test"}}
+    endpoint = "/api/import/properties"
+    first = client.post(endpoint, headers=a, json={"records": [item]})
+    assert first.status_code == 200, first.text
+    assert first.json() == {"added": 1, "skipped_existing": 0, "received": 1}
+    second = client.post(endpoint, headers=a, json={"records": [item]})
+    assert second.status_code == 200 and second.json()["skipped_existing"] == 1
+    assert len(client.get("/api/records/properties", headers=a).json()) == 1
+    assert client.get("/api/records/properties", headers=b).json() == []
+    assert client.post(endpoint, json={"records": [item]}).status_code == 401
+    bad = {"record_id": "legacy_catalog_0002", "data": {"title": "Вторая", "safe_code": "1234"}}
+    assert client.post(endpoint, headers=a, json={"records": [item, bad]}).status_code == 422
+    assert len(client.get("/api/records/properties", headers=a).json()) == 1
+    assert client.post(endpoint, headers=a, json={"records": [item, item]}).status_code == 422
+    assert client.post(endpoint, headers=a, json={"records": []}).status_code == 422
