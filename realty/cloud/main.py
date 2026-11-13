@@ -331,10 +331,6 @@ def delete_record(kind: RecordType, record_id: str, version: int, user: User = D
     db.commit()
     return {"deleted": True}
 
-@app.get("/api/health")
-def health():
-    return {"status": "ok"}
-
 @app.get("/")
 def home():
     return FileResponse(os.path.join(os.path.dirname(__file__), "cloud.html"))
@@ -645,15 +641,3 @@ async def secure_http_responses(request: Request, call_next):
         response.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
     return response
 
-@app.get("/api/health")
-def health(db: Session = Depends(session)):
-    try:
-        db.execute(sql_text("SELECT 1"))
-        if ENVIRONMENT == "production":
-            current = db.execute(sql_text("SELECT version_num FROM alembic_version")).scalar_one_or_none()
-            if current != "0002_catalog_entries":
-                raise RuntimeError("Schema version mismatch")
-            return {"status": "ok", "storage": "postgresql", "migration": current}
-        return {"status": "ok", "storage": "development"}
-    except Exception:
-        raise HTTPException(503, "Database or schema not ready")
