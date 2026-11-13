@@ -19,7 +19,9 @@ def upgrade():
     expected = set(Base.metadata.tables)
     if (existing - {"alembic_version"}) & expected:
         raise RuntimeError("Existing tables found: use a reviewed database baseline migration")
-    Base.metadata.create_all(bind=connection)
+    for name in ('users', 'records', 'email_challenges', 'auth_attempts',
+                 'snapshots', 'snapshot_chunks', 'cloud_states', 'cloud_state_history'):
+        Base.metadata.tables[name].create(bind=connection, checkfirst=False)
 
 def downgrade():
     raise RuntimeError("Destructive schema rollback is deliberately disabled: restore a DB backup instead")
