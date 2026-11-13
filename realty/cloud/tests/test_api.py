@@ -89,3 +89,52 @@ def test_snapshot_rejects_corruption():
     assert len(bad) == len(raw)
     assert client.put(f"/api/backups/{sid}/chunks/0", headers=a, json={"hex_data": bad.hex()}).status_code == 200
     assert client.post(f"/api/backups/{sid}/verify", headers=a).status_code == 409
+
+
+def full_notebook():
+    return {
+        "properties": [{"id": "flat_1", "title": "Квартира", "priceRub": 4500000, "photos": ["data:image/jpeg;base64,AAAA"]}],
+        "queue": [{"id": "queue_1", "title": "Требует разбора"}],
+        "clients": [{"id": "client_1", "name": "Тестовый клиент", "phone": "+70000000000"}],
+        "collections": [], "notes": [], "showings": [], "sources": [{"id": "source_1", "title": "Прайс"}],
+        "settings": {"custom": "сохраняется без изменений"}
+    }
+
+def test_full_notebook_sync_preserves_fields_and_recovery():
+    a = account("sync_a_" + uuid.uuid4().hex + "@example.com")
+    b = account("sync_b_" + uuid.uuid4().hex + "@example.com")
+    endpoint = "/api/sync/state"
+    assert client.get(endpoint, headers=a).json() == {"version": 0, "data": None}
+    initial = full_notebook()
+    saved = client.put(endpoint, headers=a, json={"expected_version": 0, "data": initial})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["version"] == 1
+    assert client.get(endpoint, headers=a).json()["data"] == initial
+    assert client.get(endpoint, headers=b).json()["data"] is None
+    assert client.get(endpoint).status_code == 401
+    changed = full_notebook()
+    changed["properties"][0]["priceRub"] = 4300000
+    assert client.put(endpoint, headers=a, json={"expected_version": 0, "data": changed}).status_code == 409
+    up = client.put(endpoint, headers=a, json={"expected_version": 1, "data": changed})
+    assert up.status_code == 200 and up.json()["version"] == 2
+    recovered = client.get("/api/sync/history/1", headers=a)
+    assert recovered.json()["data"] == initial
+    assert client.get("/api/sync/history/1", headers=b).status_code == 404
+    assert client.get(endpoint, headers=a).json()["data"] == changed
+    assert client.get("/api/sync/history", headers=a).json()[0]["version"] == 1
+
+def test_sync_rejects_truncated_state_and_duplicate_ids():
+    a = account("sync_validate_" + uuid.uuid4().hex + "@example.com")
+    endpoint = "/api/sync/state"
+    assert client.put(endpoint, headers=a, json={"expected_version": 0, "data": {"properties": []}}).status_code == 422
+    duplicate = full_notebook()
+    duplicate["properties"] *= 2
+    assert client.put(endpoint, headers=a, json={"expected_version": 0, "data": duplicate}).status_code == 422
+    initial = full_notebook()
+    initial["properties"] = [{"id": "p_" + str(n)} for n in range(20)]
+    assert client.put(endpoint, headers=a, json={"expected_version": 0, "data": initial}).status_code == 200
+    incomplete = full_notebook()
+    assert client.put(endpoint, headers=a, json={"expected_version": 1, "data": incomplete}).status_code == 409
+    assert client.get(endpoint, headers=a).json()["data"] == initial
+    ok = client.put(endpoint, headers=a, json={"expected_version": 1, "data": incomplete, "allow_shrink": True})
+    assert ok.status_code == 200
