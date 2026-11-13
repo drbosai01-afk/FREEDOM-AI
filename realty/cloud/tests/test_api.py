@@ -56,3 +56,36 @@ def test_catalog_import_scoped_deduplicated_and_atomic():
     assert len(client.get("/api/records/properties", headers=a).json()) == 1
     assert client.post(endpoint, headers=a, json={"records": [item, item]}).status_code == 422
     assert client.post(endpoint, headers=a, json={"records": []}).status_code == 422
+
+def test_snapshot_chunk_verify_download_and_user_isolation():
+    import hashlib
+    import json
+    raw = json.dumps({"records": [{"id": "flat", "photos": ["photo-data"], "status": "review"}]}, ensure_ascii=False).encode()
+    a = account("backup_a_" + uuid.uuid4().hex + "@example.com")
+    b = account("backup_b_" + uuid.uuid4().hex + "@example.com")
+    digest = hashlib.sha256(raw).hexdigest()
+    s = client.post("/api/backups", headers=a, json={"size": len(raw), "sha256": digest})
+    assert s.status_code == 201, s.text
+    sid = s.json()["id"]
+    assert client.get(f"/api/backups/{sid}/download", headers=a).status_code == 409
+    assert client.put(f"/api/backups/{sid}/chunks/0", headers=b, json={"hex_data": raw.hex()}).status_code == 404
+    assert client.put(f"/api/backups/{sid}/chunks/0", headers=a, json={"hex_data": raw.hex()}).status_code == 200
+    assert client.post(f"/api/backups/{sid}/verify", headers=a).json()["verified"] is True
+    result = client.get(f"/api/backups/{sid}/download", headers=a)
+    assert result.content == raw
+    assert result.headers["cache-control"] == "no-store"
+    assert client.get(f"/api/backups/{sid}/download", headers=b).status_code == 404
+    assert client.put(f"/api/backups/{sid}/chunks/0", headers=a, json={"hex_data": raw.hex()}).status_code == 409
+    assert client.get("/api/backups", headers=b).json() == []
+    assert client.get("/api/backups", headers=a).json()[0]["sha256"] == digest
+
+def test_snapshot_rejects_corruption():
+    import hashlib
+    raw = b'{"example": true}'
+    a = account("backup_corrupt_" + uuid.uuid4().hex + "@example.com")
+    s = client.post("/api/backups", headers=a, json={"size": len(raw), "sha256": hashlib.sha256(raw).hexdigest()})
+    sid = s.json()["id"]
+    bad = b'{"example": fals}'
+    assert len(bad) == len(raw)
+    assert client.put(f"/api/backups/{sid}/chunks/0", headers=a, json={"hex_data": bad.hex()}).status_code == 200
+    assert client.post(f"/api/backups/{sid}/verify", headers=a).status_code == 409
