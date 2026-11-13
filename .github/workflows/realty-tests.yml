@@ -80,3 +80,10 @@ jobs:
           python -m alembic -c alembic.ini upgrade head
           python -m alembic -c alembic.ini current
           python -c "from sqlalchemy import create_engine,inspect;import os; e=create_engine(os.environ['DATABASE_URL']); assert {'users','cloud_states','email_challenges','auth_attempts'}.issubset(inspect(e).get_table_names());print('PostgreSQL migration OK')"
+      - name: Verify non-destructive catalog import on PostgreSQL 17
+        env:
+          ENVIRONMENT: production
+          DATABASE_URL: postgresql+psycopg://freedom_ci:test_only_not_real@127.0.0.1:5432/freedom_ci
+          JWT_SECRET: ci-only-strong-key-0123456789-abcdefghijklmnopqrstuvwxyz
+          PUBLIC_BASE_URL: https://localhost.example
+        run: python -m scripts.test_postgres_import
