@@ -138,3 +138,19 @@ def test_sync_rejects_truncated_state_and_duplicate_ids():
     assert client.get(endpoint, headers=a).json()["data"] == initial
     ok = client.put(endpoint, headers=a, json={"expected_version": 1, "data": incomplete, "allow_shrink": True})
     assert ok.status_code == 200
+
+
+def test_sync_catalog_large_counts():
+    a = account("sync_many_" + uuid.uuid4().hex + "@example.com")
+    value = full_notebook()
+    value["properties"] = [{"id": "flat_"+str(i), "title": "Объект "+str(i), "priceRub": 3000000+i} for i in range(1161)]
+    value["queue"] = [{"id": "queue_"+str(i), "status": "review"} for i in range(532)]
+    value["sources"] = [{"id": "source_"+str(i), "sourceUrl": "https://example.com"} for i in range(96)]
+    saved = client.put("/api/sync/state", headers=a, json={"expected_version": 0, "data": value})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["counts"]["properties"] == 1161
+    assert saved.json()["counts"]["queue"] == 532
+    assert saved.json()["counts"]["sources"] == 96
+    loaded = client.get("/api/sync/state", headers=a)
+    assert loaded.status_code == 200
+    assert loaded.json()["data"] == value
