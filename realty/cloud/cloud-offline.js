@@ -73,13 +73,21 @@ async function syncForeground(){
   if(!auth.ok)throw Error('Сеанс истёк. Сначала войдите.');
   const person=await auth.json();
   if(person.id!==job.uid)throw Error('Данные ожидают входа в исходный аккаунт');
-  const r=await fetch('/api/sync/state',{
-   method:'PUT',credentials:'same-origin',cache:'no-store',
-   headers:{'Content-Type':'application/json'},body:JSON.stringify({expected_version:job.expected_version,data:job.data})
-  });
-  if(r.status===409){info('Конфликт версий! Изменения остались на устройстве. Требуется сравнение баз.');return}
-  if(!r.ok)throw Error('Сервер '+r.status);
-  const saved=await r.json();
+  const bytes=new TextEncoder().encode(JSON.stringify(job.data));
+  const checksum=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),b=>b.toString(16).padStart(2,'0')).join('');
+  async function request(path,method,body){
+   const r=await fetch('/api/'+path,{method,credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+   if(!r.ok){if(r.status===409)throw Error('Конфликт версий — сохранено на устройстве');throw Error('HTTP '+r.status)}
+   return r.json();
+  }
+  const upload=await request('backups','POST',{size:bytes.length,sha256:checksum});
+  for(let i=0;i<bytes.length;i+=upload.chunk_bytes){
+   const part=bytes.subarray(i,i+upload.chunk_bytes);
+   const hex=Array.from(part,b=>b.toString(16).padStart(2,'0')).join('');
+   await request('backups/'+upload.id+'/chunks/'+Math.floor(i/upload.chunk_bytes),'PUT',{hex_data:hex});
+  }
+  await request('backups/'+upload.id+'/verify','POST',{});
+  const saved=await request('sync/from-backup','POST',{snapshot_id:upload.id,expected_version:job.expected_version});
   await put('meta','base:'+job.uid,saved.version);
   const latest=await get('jobs','state');
   if(latest && latest.id===job.id)await drop('jobs','state');
@@ -112,8 +120,12 @@ if(panel){
    const cloud=await current.json();
    const base=await get('meta','base:'+uid);
    if(base===undefined && cloud.version>0){
-    enabled=false;uid=null;
-    throw Error('На сервере уже есть база. Сначала сравните её вручную. Автосинхронизация не включена.');
+    const state=await readLocal();
+    if(JSON.stringify(state)!==JSON.stringify(cloud.data)){
+     enabled=false;uid=null;
+     throw Error('На сервере уже есть отличающаяся база. Сначала сравните её вручную.');
+    }
+    await put('meta','base:'+uid,cloud.version);
    }
    info('Включено для аккаунта '+me.email);
    await queueCurrent();
