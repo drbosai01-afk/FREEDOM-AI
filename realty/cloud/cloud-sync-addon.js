@@ -11,6 +11,8 @@
   let token = sessionStorage.getItem('freedom-realty-token') || '';
   let remote = null;
   let local = null;
+  let accountEmail = '';
+  const baseKey = () => 'fr-cloud-base-version:'+accountEmail;
   const counts = (v) => Object.fromEntries(FIELDS.map(k => [k, Array.isArray(v?.[k]) ? v[k].length : -1]));
   const status = (text) => { const t = el('fr-status'); if(t) t.textContent = text; };
   function valid(data) {
@@ -79,7 +81,7 @@
   async function auth(mode){
     token='';
     const j=await api(mode,'POST',{email:el('fr-email').value.trim(),password:el('fr-pass').value});
-    token=j.access_token;sessionStorage.setItem('freedom-realty-token',token);
+    token=j.access_token;accountEmail=el('fr-email').value.trim().toLowerCase();sessionStorage.setItem('freedom-realty-token',token);sessionStorage.setItem('fr-cloud-email',accountEmail);
     el('fr-pass').value='';status('Вход выполнен');
   }
   for(const [id,mode] of [['fr-login','login'],['fr-register','register']]){
@@ -97,10 +99,12 @@
       if(!token)throw Error('Сначала войдите');
       local=await readState(); remote=await api('sync/state');
       const n=counts(local);
+      const last=Number(localStorage.getItem(baseKey()) || 0);
+      if(remote.version && last!==remote.version)throw Error('В облаке другая версия. Сначала сравните и восстановите данные; загрузка отменена, чтобы не затереть чужие изменения.');
       const confirmText='Отправить полную локальную базу в аккаунт? '+JSON.stringify(n)+'; версия сервера '+remote.version+'. Если другие устройства меняли данные, сначала сравните.';
       if(!confirm(confirmText))return;
       const j=await api('sync/state','PUT',{expected_version:remote.version,data:local,allow_shrink:false});
-      status('Сохранено: версия '+j.version+', SHA-256 '+j.sha256);
+      localStorage.setItem(baseKey(),String(j.version));status('Сохранено: версия '+j.version+', SHA-256 '+j.sha256);
     }catch(e){status(e.message)}
   };
   el('fr-restore').onclick=async()=>{
@@ -113,6 +117,7 @@
       const check=prompt('Для подтверждения напишите ВОССТАНОВИТЬ');
       if(check!=='ВОССТАНОВИТЬ'){status('Отменено');return}
       await writeRecoveryThenRestore(remote.data);
+      localStorage.setItem(baseKey(),String(remote.version));
       status('Локальная копия сохранена, данные восстановлены. Перезагрузка…');
       location.reload();
     }catch(e){status(e.message)}
