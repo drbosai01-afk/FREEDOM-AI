@@ -172,10 +172,10 @@ def test_alembic_upgrade_from_empty_database(tmp_path):
     import sqlite3
     with sqlite3.connect(dbfile) as conn:
         present = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        assert {"users", "records", "cloud_states", "cloud_state_history",
+        assert {"catalog_entries", "users", "records", "cloud_states", "cloud_state_history",
                 "email_challenges", "auth_attempts", "alembic_version"}.issubset(present)
         version = conn.execute("SELECT version_num FROM alembic_version").fetchone()[0]
-        assert version == "0001_initial"
+        assert version == "0002_catalog_entries"
 
 def test_invalid_activation_does_not_verify_account():
     assert client.get("/api/verify-email", params={"token": "invalid" * 10}).status_code == 400
