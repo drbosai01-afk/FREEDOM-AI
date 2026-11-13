@@ -289,3 +289,124 @@ def download_backup(sid: str, user: User = Depends(current_user), db: Session = 
         "Content-Disposition": 'attachment; filename="freedom-realty-snapshot.json"',
         "Cache-Control": "no-store"
     })
+
+
+# Lossless personal-notebook synchronization. No automatic destructive merging.
+import gzip
+import hashlib
+import json
+from sqlalchemy import LargeBinary, update
+from sqlalchemy.exc import IntegrityError
+from fastapi.responses import JSONResponse
+
+MAX_SYNC_JSON = 100 * 1024 * 1024
+MAX_SYNC_GZIP = 60 * 1024 * 1024
+STATE_LISTS = ("properties", "queue", "clients", "collections", "notes", "showings", "sources")
+
+class CloudState(Base):
+    __tablename__ = "cloud_states"
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    packed: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+class CloudStateHistory(Base):
+    __tablename__ = "cloud_state_history"
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    packed: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+
+Base.metadata.create_all(engine)
+
+class CloudStateInput(BaseModel):
+    expected_version: int = Field(ge=0)
+    data: dict
+    allow_shrink: bool = False
+
+def state_counts(value):
+    return {key: len(value[key]) for key in STATE_LISTS}
+
+def encode_cloud_state(value):
+    if not isinstance(value, dict) or any(not isinstance(value.get(key), list) for key in STATE_LISTS):
+        raise HTTPException(422, "Ожидается полный экспорт Блокнота с семью разделами")
+    for key in STATE_LISTS:
+        items = value[key]
+        if not all(isinstance(x, dict) and isinstance(x.get("id"), str) and x["id"] for x in items):
+            raise HTTPException(422, "У записей отсутствуют строковые идентификаторы: " + key)
+        ids = [x["id"] for x in items]
+        if len(ids) != len(set(ids)):
+            raise HTTPException(422, "Найдены повторяющиеся ID: " + key)
+    raw = json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    if len(raw) > MAX_SYNC_JSON:
+        raise HTTPException(413, "Размер каталога превышает ограничение 100 МБ")
+    packed = gzip.compress(raw, compresslevel=6)
+    if len(packed) > MAX_SYNC_GZIP:
+        raise HTTPException(413, "Сжатый каталог превышает ограничение 60 МБ")
+    return packed, hashlib.sha256(raw).hexdigest()
+
+def decode_cloud_state(packed, checksum):
+    raw = gzip.decompress(packed)
+    if len(raw) > MAX_SYNC_JSON or hashlib.sha256(raw).hexdigest() != checksum:
+        raise HTTPException(500, "Ошибка целостности сохранённого каталога")
+    return json.loads(raw)
+
+@app.get("/api/sync/state")
+def fetch_cloud_state(user: User = Depends(current_user), db: Session = Depends(session)):
+    row = db.get(CloudState, user.id)
+    if row is None:
+        return JSONResponse({"version": 0, "data": None}, headers={"Cache-Control": "no-store"})
+    return JSONResponse({"version": row.version, "data": decode_cloud_state(row.packed, row.checksum),
+                         "sha256": row.checksum, "updated_at": row.updated_at.isoformat()},
+                        headers={"Cache-Control": "no-store"})
+
+@app.put("/api/sync/state")
+def push_cloud_state(body: CloudStateInput, user: User = Depends(current_user), db: Session = Depends(session)):
+    packed, checksum = encode_cloud_state(body.data)
+    previous = db.get(CloudState, user.id)
+    if previous is None:
+        if body.expected_version != 0:
+            raise HTTPException(409, "Версия облака отличается. Сначала загрузите облачную копию.")
+        db.add(CloudState(user_id=user.id, version=1, packed=packed, checksum=checksum, updated_at=datetime.now(timezone.utc)))
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            raise HTTPException(409, "Облачный каталог уже создан на другом устройстве")
+        return {"version": 1, "sha256": checksum, "counts": state_counts(body.data)}
+    if previous.version != body.expected_version:
+        raise HTTPException(409, "Облачная база изменена на другом устройстве: перезагрузите её перед сохранением")
+    old_data = decode_cloud_state(previous.packed, previous.checksum)
+    if not body.allow_shrink:
+        for key in ("properties", "queue", "clients", "collections", "notes", "showings"):
+            if len(old_data[key]) > 0 and len(body.data[key]) < len(old_data[key]) * 0.9:
+                raise HTTPException(409, "Подозрение на потерю записей раздела " + key + ". Требуется подтверждённое восстановление.")
+    db.add(CloudStateHistory(user_id=user.id, version=previous.version, packed=previous.packed, checksum=previous.checksum))
+    result = db.execute(update(CloudState).where(
+        CloudState.user_id == user.id, CloudState.version == body.expected_version
+    ).values(version=body.expected_version+1, packed=packed, checksum=checksum,
+             updated_at=datetime.now(timezone.utc)))
+    if result.rowcount != 1:
+        db.rollback()
+        raise HTTPException(409, "Конфликт одновременных изменений")
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "Конфликт сохранения версии")
+    return {"version": body.expected_version+1, "sha256": checksum, "counts": state_counts(body.data)}
+
+@app.get("/api/sync/history")
+def cloud_state_history(user: User = Depends(current_user), db: Session = Depends(session)):
+    records = db.scalars(select(CloudStateHistory).where(CloudStateHistory.user_id == user.id)
+                         .order_by(CloudStateHistory.version.desc()).limit(30)).all()
+    return [{"version": r.version, "sha256": r.checksum} for r in records]
+
+@app.get("/api/sync/history/{version}")
+def cloud_state_recovery(version: int, user: User = Depends(current_user), db: Session = Depends(session)):
+    row = db.get(CloudStateHistory, (user.id, version))
+    if row is None:
+        raise HTTPException(404, "Предыдущая версия не найдена")
+    return JSONResponse({"version": version, "data": decode_cloud_state(row.packed, row.checksum)},
+                        headers={"Cache-Control": "no-store"})
