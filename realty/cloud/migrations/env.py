@@ -2,6 +2,7 @@ from logging.config import fileConfig
 import os
 from alembic import context
 from sqlalchemy import create_engine, pool
+os.environ['FREEDOM_MIGRATING'] = '1'
 from main import Base
 
 config = context.config
