@@ -57,9 +57,19 @@ function render(){
  if(!state)return;
  const values=document.getElementById('fr-query').value.toLocaleLowerCase('ru');
  const region=document.getElementById('fr-district').value,cond=document.getElementById('fr-condition').value,band=document.getElementById('fr-price').value,rooms=document.getElementById('fr-rooms').value;
+ const minPrice=Math.max(0,Number(document.getElementById('fr-min-price').value||0))*1000000;
+ const maxPrice=Math.max(0,Number(document.getElementById('fr-max-price').value||0))*1000000;
+ const maxFloor=Math.max(0,Number(document.getElementById('fr-max-floor').value||0));
+ const minArea=Math.max(0,Number(document.getElementById('fr-min-area').value||0));
+ const onlyContacts=document.getElementById('fr-contact-only').checked;
  const base=activeFolder==='queue'?(state.queue||[]):(state.properties||[]);
  filtered=base.filter(p=>{
   if(activeFolder==='nocontact'&&hasContact(p))return false;
+  if(onlyContacts&&!hasContact(p))return false;
+  if(minPrice&&(!n(p.priceRub)||n(p.priceRub)<minPrice))return false;
+  if(maxPrice&&(!n(p.priceRub)||n(p.priceRub)>maxPrice))return false;
+  if(maxFloor&&(!n(p.floor)||n(p.floor)>maxFloor))return false;
+  if(minArea&&n(p.areaM2)<minArea)return false;
   if(region&&district(p)!==region)return false;
   if(cond&&condition(p)!==cond)return false;
   if(band&&priceBand(p)!==band)return false;
@@ -112,7 +122,9 @@ const screen=document.createElement('section');screen.id=ID;screen.hidden=true;s
 screen.innerHTML='<div class="fr-head"><div><small>FREEDOM REALTY</small><h2>Каталог риелтора</h2></div><button id="fr-close" type="button" aria-label="Закрыть">✕</button></div>'+
  '<div id="fr-nav" class="fr-nav" role="tablist"></div><div class="fr-filters"><label>Поиск по ЖК, адресу и описанию<input id="fr-query" placeholder="Например: Метальникова, 2-комн, 5 млн"></label>'+
  '<label>Район<select id="fr-district"><option value="">Все</option></select></label><label>Цена<select id="fr-price"><option value="">Любая</option><option>До 4 млн</option><option>4–6 млн</option><option>6–9 млн</option><option>От 9 млн</option><option>Без цены</option></select></label>'+
+ '<label>Цена от, млн ₽<input id="fr-min-price" type="number" min="0" step=".1" placeholder="3.5"></label><label>Цена до, млн ₽<input id="fr-max-price" type="number" min="0" step=".1" placeholder="6"></label>'+
  '<label>Комнатность<select id="fr-rooms"><option value="">Любая</option></select></label><label>Состояние<select id="fr-condition"><option value="">Любое</option></select></label>'+
+ '<label>Этаж не выше<input id="fr-max-floor" type="number" min="0" step="1" placeholder="5"></label><label>Площадь от, м²<input id="fr-min-area" type="number" min="0" step="1" placeholder="35"></label><label class="fr-check"><input type="checkbox" id="fr-contact-only"> Только с контактами</label>'+
  '<label>Сортировать<select id="fr-sort"><option value="newest">Сначала обновлённые</option><option value="cheap">Сначала дешевле</option><option value="expensive">Сначала дороже</option><option value="area">По площади</option></select></label>'+
  '<label>Группировка<select id="fr-group"><option value="none">Без групп</option><option value="district">По районам</option><option value="price">По цене</option><option value="condition">По состоянию</option></select></label>'+
  '<button type="button" id="fr-reset">Сбросить</button><button type="button" id="fr-refresh">Обновить</button></div>'+
@@ -123,7 +135,7 @@ const launch=document.createElement('button');launch.id='fr-launch';launch.type=
 launch.onclick=()=>{screen.hidden=false;launch.hidden=true;document.body.classList.add('fr-open');refresh()};
 document.getElementById('fr-close').onclick=()=>{screen.hidden=true;launch.hidden=false;document.body.classList.remove('fr-open')};
 screen.querySelectorAll('input,select').forEach(x=>x.addEventListener('input',()=>{groupMode=document.getElementById('fr-group').value;redraw()}));
-document.getElementById('fr-reset').onclick=()=>{screen.querySelectorAll('input,select').forEach(e=>e.value='');groupMode='none';redraw()};
+document.getElementById('fr-reset').onclick=()=>{screen.querySelectorAll('input,select').forEach(e=>{if(e.type==='checkbox')e.checked=false;else e.value=''});groupMode='none';redraw()};
 document.getElementById('fr-refresh').onclick=refresh;
 document.getElementById('fr-nav').onclick=e=>{const node=e.target.closest('[data-folder]');if(!node)return;activeFolder=node.dataset.folder;redraw()};
 })();
