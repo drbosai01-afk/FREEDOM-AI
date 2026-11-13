@@ -337,10 +337,6 @@ def delete_record(kind: RecordType, record_id: str, version: int, user: User = D
     db.commit()
     return {"deleted": True}
 
-@app.get("/api/health")
-def health():
-    return {"status": "ok"}
-
 @app.get("/")
 def home():
     return FileResponse(os.path.join(os.path.dirname(__file__), "cloud.html"))
