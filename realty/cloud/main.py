@@ -182,3 +182,110 @@ def health():
 @app.get("/")
 def home():
     return FileResponse(os.path.join(os.path.dirname(__file__), "cloud.html"))
+
+
+# Full-fidelity backups are isolated from live record tables.
+import hashlib
+import json
+import uuid
+from sqlalchemy import Boolean, LargeBinary
+from fastapi import Response
+
+MAX_BACKUP = 25 * 1024 * 1024
+CHUNK_SIZE = 128 * 1024
+
+class Snapshot(Base):
+    __tablename__ = "snapshots"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    size: Mapped[int] = mapped_column(Integer)
+    checksum: Mapped[str] = mapped_column(String(64))
+    verified: Mapped[bool] = mapped_column(Boolean, default=False)
+
+class SnapshotChunk(Base):
+    __tablename__ = "snapshot_chunks"
+    snapshot_id: Mapped[str] = mapped_column(ForeignKey("snapshots.id"), primary_key=True)
+    part: Mapped[int] = mapped_column(Integer, primary_key=True)
+    payload: Mapped[bytes] = mapped_column(LargeBinary)
+
+Base.metadata.create_all(engine)
+
+class SnapshotStart(BaseModel):
+    size: int = Field(ge=2, le=MAX_BACKUP)
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+class ChunkInput(BaseModel):
+    hex_data: str = Field(min_length=2, max_length=CHUNK_SIZE*2, pattern=r"^[a-fA-F0-9]+$")
+
+def own_snapshot(db: Session, user: User, sid: str):
+    row = db.get(Snapshot, sid)
+    if row is None or row.user_id != user.id:
+        raise HTTPException(404, "Резервная копия не найдена")
+    return row
+
+@app.post("/api/backups", status_code=201)
+def create_backup(body: SnapshotStart, user: User = Depends(current_user), db: Session = Depends(session)):
+    row = Snapshot(id=str(uuid.uuid4()), user_id=user.id, size=body.size, checksum=body.sha256, verified=False)
+    db.add(row)
+    db.commit()
+    return {"id": row.id, "chunk_bytes": CHUNK_SIZE}
+
+@app.put("/api/backups/{sid}/chunks/{part}")
+def upload_backup_chunk(sid: str, part: int, body: ChunkInput, user: User = Depends(current_user), db: Session = Depends(session)):
+    row = own_snapshot(db, user, sid)
+    if row.verified:
+        raise HTTPException(409, "Резервная копия уже проверена")
+    n = (row.size + CHUNK_SIZE - 1) // CHUNK_SIZE
+    if part < 0 or part >= n:
+        raise HTTPException(422, "Номер фрагмента вне диапазона")
+    raw = bytes.fromhex(body.hex_data)
+    if len(raw) != min(CHUNK_SIZE, row.size - part*CHUNK_SIZE):
+        raise HTTPException(422, "Неверный размер фрагмента")
+    old = db.get(SnapshotChunk, (sid, part))
+    if old:
+        if old.payload != raw:
+            raise HTTPException(409, "Фрагмент уже существует с другим содержимым")
+    else:
+        db.add(SnapshotChunk(snapshot_id=sid, part=part, payload=raw))
+        db.commit()
+    return {"saved": part}
+
+def get_backup_bytes(db, row):
+    parts = db.scalars(select(SnapshotChunk).where(SnapshotChunk.snapshot_id==row.id).order_by(SnapshotChunk.part)).all()
+    n = (row.size + CHUNK_SIZE - 1) // CHUNK_SIZE
+    if len(parts) != n or any(p.part != i for i,p in enumerate(parts)):
+        raise HTTPException(409, "Резервная копия загружена не полностью")
+    blob = b"".join(p.payload for p in parts)
+    if len(blob) != row.size or hashlib.sha256(blob).hexdigest() != row.checksum:
+        raise HTTPException(409, "Не совпадает контрольная сумма")
+    return blob
+
+@app.post("/api/backups/{sid}/verify")
+def verify_backup(sid: str, user: User = Depends(current_user), db: Session = Depends(session)):
+    row = own_snapshot(db, user, sid)
+    blob = get_backup_bytes(db, row)
+    try:
+        value = json.loads(blob)
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(422, "Некорректный файл JSON")
+    if not isinstance(value, (dict,list)):
+        raise HTTPException(422, "Неожиданный формат JSON")
+    row.verified = True
+    db.commit()
+    return {"verified": True, "bytes": row.size, "sha256": row.checksum, "id": row.id}
+
+@app.get("/api/backups")
+def list_backups(user: User = Depends(current_user), db: Session = Depends(session)):
+    items = db.scalars(select(Snapshot).where(Snapshot.user_id==user.id)).all()
+    return [{"id": x.id, "bytes": x.size, "verified": x.verified, "sha256": x.checksum} for x in items]
+
+@app.get("/api/backups/{sid}/download")
+def download_backup(sid: str, user: User = Depends(current_user), db: Session = Depends(session)):
+    row = own_snapshot(db, user, sid)
+    if not row.verified:
+        raise HTTPException(409, "Резервная копия не проверена")
+    blob = get_backup_bytes(db,row)
+    return Response(blob, media_type="application/json", headers={
+        "Content-Disposition": 'attachment; filename="freedom-realty-snapshot.json"',
+        "Cache-Control": "no-store"
+    })
