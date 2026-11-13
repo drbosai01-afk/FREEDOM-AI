@@ -24,6 +24,7 @@ def configure_subscription(Base):
         payment_provider: Mapped[str | None] = mapped_column(String(40), nullable=True)
         provider_customer_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
         status: Mapped[str] = mapped_column(String(20), nullable=False, default="trial")
+        complimentary: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     return Subscription
 
 def activate_trial(db, model, user_id: int, *, at=None):
@@ -43,6 +44,10 @@ def entitlement(row, *, at=None):
     at = at or utcnow()
     if row is None:
         return {"status": "inactive", "allowed": False, "trial_ends_at": None,
+                "paid_until": None, "monthly_price_rub": MONTHLY_PRICE_RUB,
+                "currency": "RUB", "plan": PLAN_CODE}
+    if getattr(row, "complimentary", 0) == 1:
+        return {"status": "complimentary", "allowed": True, "trial_ends_at": None,
                 "paid_until": None, "monthly_price_rub": MONTHLY_PRICE_RUB,
                 "currency": "RUB", "plan": PLAN_CODE}
     trial_end = row.trial_ends_at.replace(tzinfo=timezone.utc) if row.trial_ends_at.tzinfo is None else row.trial_ends_at
