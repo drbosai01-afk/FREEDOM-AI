@@ -4,7 +4,7 @@
 (() => {
 'use strict';
 const NAME='freedom-realty-outbox', TAG='freedom-realty-upload';
-let enabled=false, uid=null, busy=false, currentVersion=null;
+let enabled=false, uid=null, busy=false;
 const el=id=>document.getElementById(id);
 function openOutbox(){
  return new Promise((res,rej)=>{
@@ -20,8 +20,10 @@ async function operation(store,mode,command){
  const db=await openOutbox();
  try{return await new Promise((resolve,reject)=>{
   const tx=db.transaction(store,mode),req=command(tx.objectStore(store));
-  req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);
-  tx.onabort=()=>reject(tx.error);
+  let answer;
+  req.onsuccess=()=>{answer=req.result};req.onerror=()=>reject(req.error);
+  tx.oncomplete=()=>resolve(answer);
+  tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);
  })}finally{db.close()}
 }
 async function get(store,key){return operation(store,'readonly',s=>s.get(key))}
@@ -59,7 +61,7 @@ async function queueCurrent(){
   const base=saved===undefined?0:Number(saved);
   const job={id:String(Date.now())+'-'+Math.random().toString(36).slice(2),
     uid,created:Date.now(),expected_version:base,data:state};
-  await put('jobs','state',job);
+  await put('jobs','state:'+uid,job);
   info(navigator.onLine?'Изменение ожидает синхронизации':'Офлайн: изменение сохранено на устройстве');
   await registerSync();
  }catch(e){info('Ошибка локальной очереди: '+e.message)}
@@ -68,7 +70,7 @@ async function syncForeground(){
  if(busy||!navigator.onLine||!enabled)return;
  busy=true;
  try{
-  const job=await get('jobs','state');if(!job)return;
+  const job=await get('jobs','state:'+uid);if(!job)return;
   const auth=await fetch('/api/me',{credentials:'same-origin',cache:'no-store'});
   if(!auth.ok)throw Error('Сеанс истёк. Сначала войдите.');
   const person=await auth.json();
@@ -89,8 +91,13 @@ async function syncForeground(){
   await request('backups/'+upload.id+'/verify','POST',{});
   const saved=await request('sync/from-backup','POST',{snapshot_id:upload.id,expected_version:job.expected_version});
   await put('meta','base:'+job.uid,saved.version);
-  const latest=await get('jobs','state');
-  if(latest && latest.id===job.id)await drop('jobs','state');
+  const latest=await get('jobs','state:'+uid);
+  if(latest?.id===job.id)await drop('jobs','state:'+uid);
+  else if(latest?.uid===uid && latest.expected_version===job.expected_version){
+   latest.expected_version=saved.version;
+   await put('jobs','state:'+uid,latest);
+   await registerSync();
+  }
   info('Синхронизировано: версия '+saved.version);
  }catch(e){info('Синхронизация отложена: '+e.message)}
  finally{busy=false}
@@ -109,7 +116,7 @@ if(panel){
  div.innerHTML='<p><label><input type="checkbox" id="fr-auto-sync"> Автосинхронизация при наличии интернета</label></p><small id="fr-outbox-status">Выключена — данные остаются локально</small>';
  panel.appendChild(div);
  el('fr-auto-sync').addEventListener('change',async e=>{
-  if(!e.target.checked){enabled=false;uid=null;info('Автосинхронизация выключена');return}
+  if(!e.target.checked){const old=uid;enabled=false;uid=null;if(old!==null)await put('meta','enabled:'+old,false);info('Автосинхронизация выключена');return}
   try{
    const r=await fetch('/api/me',{credentials:'same-origin',cache:'no-store'});
    if(!r.ok)throw Error('Для фоновой синхронизации нужно войти и подтвердить email');
@@ -127,6 +134,11 @@ if(panel){
     }
     await put('meta','base:'+uid,cloud.version);
    }
+   if(base!==undefined && Number(base)!==cloud.version){
+    enabled=false;uid=null;
+    throw Error('Облачная версия изменилась. Сначала сравните базы вручную.');
+   }
+   await put('meta','enabled:'+uid,true);
    info('Включено для аккаунта '+me.email);
    await queueCurrent();
   }catch(err){enabled=false;uid=null;e.target.checked=false;info(err.message)}
