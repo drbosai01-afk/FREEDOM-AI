@@ -7,20 +7,17 @@ Requires DATABASE_URL and confirmation by an administrator with server access.
 Never expose this action through a public HTTP endpoint.
 """
 import argparse
-from sqlalchemy import create_engine, select
+from sqlalchemy import Table, MetaData, select
 from sqlalchemy.orm import Session
 from main import User
-from subscription import configure_subscription, activate_trial
-from main import Base
+from main import engine
 
 def grant(email, db):
     email = email.strip().lower()
     user = db.scalar(select(User).where(User.email == email))
     if user is None or not user.email_verified:
         raise ValueError("The user must register and verify their email first")
-    Subscription = Base.metadata.tables.get("subscriptions")
-    if Subscription is None:
-        raise RuntimeError("Subscriptions migration has not been deployed")
+    Subscription = Table("subscriptions", MetaData(), autoload_with=engine)
     row = db.execute(select(Subscription.c.user_id).where(Subscription.c.user_id == user.id)).first()
     if row is None:
         from datetime import datetime, timedelta, timezone
