@@ -52,6 +52,13 @@ class Credentials(BaseModel):
     email: EmailStr
     password: str = Field(min_length=10, max_length=128)
 
+class ImportItem(BaseModel):
+    record_id: str = Field(min_length=1, max_length=100, pattern=r"^[a-zA-Z0-9_-]+$")
+    data: dict[str, str]
+
+class ImportBatch(BaseModel):
+    records: list[ImportItem] = Field(min_length=1, max_length=300)
+
 class RecordInput(BaseModel):
     record_id: str = Field(min_length=1, max_length=100, pattern=r"^[a-zA-Z0-9_-]+$")
     data: dict[str, str] = Field(default_factory=dict)
@@ -133,6 +140,29 @@ def upsert_record(kind: RecordType, body: RecordInput, user: User = Depends(curr
     db.commit()
     db.refresh(item)
     return record_json(item)
+
+@app.post("/api/import/properties")
+def import_properties(batch: ImportBatch, user: User = Depends(current_user), db: Session = Depends(session)):
+    """Import privately; never replace existing records or import access codes into public source."""
+    ids = [item.record_id for item in batch.records]
+    if len(set(ids)) != len(ids):
+        raise HTTPException(422, "Повторяющиеся идентификаторы в файле")
+    allowed = {"title", "district", "address", "rooms", "area", "floor", "price", "condition", "url", "notes", "source"}
+    for item in batch.records:
+        if not item.data.get("title", "").strip():
+            raise HTTPException(422, "У объекта нет названия")
+        if set(item.data) - allowed or any(len(k) > 50 or len(v) > 5000 for k, v in item.data.items()):
+            raise HTTPException(422, "Недопустимые поля или слишком длинные значения")
+        if len(str(item.data).encode("utf-8")) > 16000:
+            raise HTTPException(422, "Слишком большая запись")
+    existing = set(db.scalars(select(Record.record_id).where(
+        Record.user_id == user.id, Record.kind == "properties", Record.record_id.in_(ids)
+    )).all())
+    fresh = [item for item in batch.records if item.record_id not in existing]
+    for item in fresh:
+        db.add(Record(user_id=user.id, kind="properties", record_id=item.record_id, data=item.data, version=1))
+    db.commit()
+    return {"added": len(fresh), "skipped_existing": len(batch.records) - len(fresh), "received": len(batch.records)}
 
 @app.delete("/api/records/{kind}/{record_id}")
 def delete_record(kind: RecordType, record_id: str, version: int, user: User = Depends(current_user), db: Session = Depends(session)):
