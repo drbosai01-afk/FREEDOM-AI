@@ -22,8 +22,8 @@ print(json.dumps({
     "content_type": content_type,
     "preview_first_400_chars_redacted": re.sub(r'[0-9A-Za-z]', 'X', text[:400]),
     "seed_object_indicator_counts": {
-        "sourceId": len(re.findall(r'["\\\']sourceId["\\\']\\s*:', text)),
-        "externalId": len(re.findall(r'["\\\']externalId["\\\']\\s*:', text)),
-        "title": len(re.findall(r'["\\\']title["\\\']\\s*:', text)),
+        "sourceId": len(re.findall(r'"sourceId"\s*:', text)),
+        "externalId": len(re.findall(r'"externalId"\s*:', text)),
+        "title": len(re.findall(r'"title"\s*:', text)),
     },
 }, ensure_ascii=False, indent=2))
