@@ -25,11 +25,22 @@ async function freedomSync(){
  if(!me.ok)throw Error('Account unavailable');
  const user=await me.json();
  if(user.id!==job.uid){await freedomNotify('FREEDOM_SYNC_CONFLICT');return}
- const res=await fetch('/api/sync/state',{method:'PUT',cache:'no-store',credentials:'same-origin',
-  headers:{'Content-Type':'application/json'},body:JSON.stringify({expected_version:job.expected_version,data:job.data})});
- if(res.status===409){await freedomNotify('FREEDOM_SYNC_CONFLICT');return}
- if(!res.ok)throw Error('Retry later: '+res.status);
- const result=await res.json();
+ const bytes=new TextEncoder().encode(JSON.stringify(job.data));
+ const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),x=>x.toString(16).padStart(2,'0')).join('');
+ async function post(path,method,body){
+  const res=await fetch('/api/'+path,{method,cache:'no-store',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(res.status===409){await freedomNotify('FREEDOM_SYNC_CONFLICT');throw Error('conflict')}
+  if(!res.ok)throw Error('Retry later: '+res.status);
+  return res.json();
+ }
+ const upload=await post('backups','POST',{size:bytes.length,sha256:digest});
+ for(let i=0;i<bytes.length;i+=upload.chunk_bytes){
+  const part=bytes.subarray(i,i+upload.chunk_bytes);
+  const hex=Array.from(part,x=>x.toString(16).padStart(2,'0')).join('');
+  await post('backups/'+upload.id+'/chunks/'+Math.floor(i/upload.chunk_bytes),'PUT',{hex_data:hex});
+ }
+ await post('backups/'+upload.id+'/verify','POST',{});
+ const result=await post('sync/from-backup','POST',{snapshot_id:upload.id,expected_version:job.expected_version});
  await freedomDBOp('meta','readwrite',s=>s.put(result.version,'base:'+job.uid));
  const pending=await freedomDBOp('jobs','readonly',s=>s.get('state'));
  if(pending?.id===job.id)await freedomDBOp('jobs','readwrite',s=>s.delete('state'));
