@@ -13,7 +13,7 @@ from fastapi import Depends, FastAPI, HTTPException, Header, Request, Response, 
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, EmailStr, Field
 from pwdlib import PasswordHash
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, UniqueConstraint, create_engine, select, delete, func
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, UniqueConstraint, create_engine, select, delete, func, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 # In production, reject ephemeral storage and missing credentials: fail closed.
@@ -595,3 +595,23 @@ def sync_from_backup(body: SyncFromBackup, user: User = Depends(current_user),
         raise HTTPException(422, "Нужен полный объект Блокнота")
     return push_cloud_state(CloudStateInput(expected_version=body.expected_version, data=data),
                             user=user, db=db)
+
+@app.get("/api/health")
+def health():
+    """Operational gate: 200 only with persistent PostgreSQL, correct migration and email setup."""
+    is_pg = DATABASE_URL.startswith("postgresql+psycopg://")
+    smtp_ready = all(os.getenv(k) for k in ("SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM"))
+    https_ready = os.getenv("PUBLIC_BASE_URL", "").startswith("https://")
+    migration_ready = False
+    if ENVIRONMENT == "production" and is_pg:
+        try:
+            with engine.connect() as c:
+                migration_ready = c.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0002_catalog_entries"
+        except Exception:
+            migration_ready = False
+    ready = ENVIRONMENT == "production" and is_pg and smtp_ready and https_ready and migration_ready
+    return JSONResponse({"service": "freedom-realty", "ready": ready,
+                         "database": "postgresql" if is_pg else "not-configured",
+                         "schema_up_to_date": migration_ready,
+                         "email_ready": bool(smtp_ready), "https_configured": bool(https_ready)},
+                        status_code=200 if ready else 503, headers={"Cache-Control": "no-store"})
