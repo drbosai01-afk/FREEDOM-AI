@@ -543,5 +543,5 @@ def cloud_state_recovery(version: int, user: User = Depends(current_user), db: S
                         headers={"Cache-Control": "no-store"})
 
 # Development/test convenience only. Production schema is managed by Alembic migrations.
-if ENVIRONMENT != 'production':
+if ENVIRONMENT != 'production' and os.getenv('FREEDOM_MIGRATING') != '1':
     Base.metadata.create_all(engine)
