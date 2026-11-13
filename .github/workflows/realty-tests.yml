@@ -22,4 +22,4 @@ jobs:
       - name: Run API tests
         env:
           JWT_SECRET: test-only-ci-secret-change-me
-        run: pytest -q
+        run: python -m pytest -q
