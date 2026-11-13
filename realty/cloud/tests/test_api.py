@@ -188,3 +188,54 @@ def test_login_rate_limit_is_enforced():
     blocked = client.post("/api/login", json={"email": email, "password": "incorrect_password_2026"})
     assert blocked.status_code == 429
     assert blocked.headers["retry-after"] == "3600"
+
+
+def test_verified_email_flow_without_sending_real_email(monkeypatch):
+    import main
+    import hashlib
+    token = "valid-verification-token-" + uuid.uuid4().hex + uuid.uuid4().hex
+    email = "verify_" + uuid.uuid4().hex + "@example.com"
+    sent = []
+    monkeypatch.setattr(main, "ENVIRONMENT", "production")
+    monkeypatch.setattr(main, "send_activation", lambda address, secret: sent.append((address, secret)))
+    from fastapi.testclient import TestClient
+    isolated = TestClient(main.app)
+    created = isolated.post("/api/register", json={"email": email, "password": "secure_password_2026"})
+    assert created.status_code == 201, created.text
+    assert "access_token" not in created.json()
+    assert len(sent) == 1 and sent[0][0] == email
+    assert isolated.post("/api/login", json={"email": email, "password": "secure_password_2026"}).status_code == 403
+    verified = isolated.get("/api/verify-email", params={"token": sent[0][1]})
+    assert verified.status_code == 200 and verified.json()["verified"] is True
+    assert isolated.get("/api/verify-email", params={"token": sent[0][1]}).status_code == 400
+    assert isolated.post("/api/login", json={"email": email, "password": "secure_password_2026"}).status_code == 200
+
+def test_chunked_sync_roundtrip_and_retry_safety():
+    import json
+    import hashlib
+    user = account("chunks_" + uuid.uuid4().hex + "@example.com")
+    full = full_notebook()
+    full["properties"] = [{"id": "p_"+str(i), "rawText": "X"*400, "priceRub": 4000000+i}
+                          for i in range(1161)]
+    full["queue"] = [{"id": "q_"+str(i), "sourceUrl": "https://example.com/"+str(i)}
+                     for i in range(532)]
+    full["sources"] = [{"id": "s_"+str(i), "name": "Прайс"} for i in range(96)]
+    raw = json.dumps(full, ensure_ascii=False).encode("utf8")
+    assert len(raw)>128*1024
+    started = client.post("/api/backups", headers=user, json={
+        "size":len(raw),"sha256":hashlib.sha256(raw).hexdigest()})
+    assert started.status_code == 201
+    sid = started.json()["id"]
+    step = started.json()["chunk_bytes"]
+    for i in range(0,len(raw),step):
+        body={"hex_data":raw[i:i+step].hex()}
+        saved=client.put("/api/backups/"+sid+"/chunks/"+str(i//step),headers=user,json=body)
+        assert saved.status_code == 200, saved.text
+    assert client.post("/api/backups/"+sid+"/verify",headers=user).status_code == 200
+    saved=client.post("/api/sync/from-backup",headers=user,json={
+        "snapshot_id":sid,"expected_version":0})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["counts"]["properties"] == 1161
+    assert client.get("/api/sync/state",headers=user).json()["data"] == full
+    assert client.post("/api/sync/from-backup",headers=user,json={
+        "snapshot_id":sid,"expected_version":0}).status_code == 409
