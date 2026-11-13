@@ -347,7 +347,7 @@ import uuid
 from sqlalchemy import Boolean, LargeBinary
 from fastapi import Response
 
-MAX_BACKUP = 25 * 1024 * 1024
+MAX_BACKUP = 50 * 1024 * 1024
 CHUNK_SIZE = 128 * 1024
 
 class Snapshot(Base):
@@ -573,3 +573,25 @@ if ENVIRONMENT != 'production' and os.getenv('FREEDOM_MIGRATING') != '1':
 def logout(response: Response):
     response.delete_cookie("fr_session", path="/api", secure=ENVIRONMENT=="production", samesite="strict", httponly=True)
     return {"ok": True}
+
+# Large, lossless notebook sync in bounded chunks. Vercel cannot receive
+# multi-megabyte client JSON in a single HTTP request.
+class SyncFromBackup(BaseModel):
+    snapshot_id: str = Field(pattern=r"^[a-f0-9-]{36}$")
+    expected_version: int = Field(ge=0)
+
+@app.post("/api/sync/from-backup")
+def sync_from_backup(body: SyncFromBackup, user: User = Depends(current_user),
+                     db: Session = Depends(session)):
+    snapshot = own_snapshot(db, user, body.snapshot_id)
+    if not snapshot.verified:
+        raise HTTPException(409, "Сначала завершите проверку SHA-256")
+    blob = get_backup_bytes(db, snapshot)
+    try:
+        data = json.loads(blob.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(422, "Некорректный JSON")
+    if not isinstance(data, dict):
+        raise HTTPException(422, "Нужен полный объект Блокнота")
+    return push_cloud_state(CloudStateInput(expected_version=body.expected_version, data=data),
+                            user=user, db=db)
