@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 import jwt
-from fastapi import Depends, FastAPI, HTTPException, Header, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Header, Request, Response, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, EmailStr, Field
 from pwdlib import PasswordHash
@@ -148,11 +148,23 @@ def session():
     with SessionLocal() as db:
         yield db
 
-def current_user(authorization: str | None = Header(default=None), db: Session = Depends(session)) -> User:
-    if not authorization or not authorization.startswith("Bearer "):
+def current_user(request: Request, authorization: str | None = Header(default=None), db: Session = Depends(session)) -> User:
+    bearer = authorization[7:] if authorization and authorization.startswith("Bearer ") else None
+    cookie = request.cookies.get("fr_session")
+    token = bearer or cookie
+    if not token:
         raise HTTPException(401, "Требуется авторизация")
+    if cookie and not bearer and request.method not in ("GET", "HEAD", "OPTIONS"):
+        from urllib.parse import urlsplit
+        origin = request.headers.get("origin", "")
+        referer = request.headers.get("referer", "")
+        allowed = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+        if not allowed.startswith("https://") or (
+            origin != allowed and not (not origin and referer.startswith(allowed + "/"))
+        ):
+            raise HTTPException(403, "Требуется запрос с разрешённого источника")
     try:
-        payload = jwt.decode(authorization[7:], JWT_SECRET, algorithms=["HS256"])
+        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
         uid = int(payload["sub"])
     except (jwt.PyJWTError, KeyError, ValueError):
         raise HTTPException(401, "Неверный или просроченный токен")
@@ -163,14 +175,17 @@ def current_user(authorization: str | None = Header(default=None), db: Session =
         raise HTTPException(403, "Подтвердите email")
     return user
 
-def issue_token(user: User) -> dict:
+def issue_token(user: User, response: Response | None = None) -> dict:
     expiry = datetime.now(timezone.utc) + timedelta(hours=12)
     token = jwt.encode({"sub": str(user.id), "exp": expiry}, JWT_SECRET, algorithm="HS256")
+    if ENVIRONMENT == "production" and response is not None:
+        response.set_cookie("fr_session", token, max_age=12*3600,
+                            secure=True, httponly=True, samesite="strict", path="/api")
     return {"access_token": token, "token_type": "bearer"}
 
 
 @app.post("/api/register", status_code=201)
-def register(creds: Credentials, request: Request, db: Session = Depends(session)):
+def register(creds: Credentials, request: Request, response: Response, db: Session = Depends(session)):
     email = str(creds.email).lower()
     auth_limit(request, db, "register", email, 5)
     if db.scalar(select(User).where(User.email == email)):
@@ -194,7 +209,7 @@ def register(creds: Credentials, request: Request, db: Session = Depends(session
             # The user remains unverified. A resend is possible after SMTP is repaired.
             raise HTTPException(503, "Отправка письма временно недоступна")
         return {"message": "Проверьте почту и подтвердите email"}
-    return issue_token(user)
+    return issue_token(user, response)
 
 @app.get("/api/verify-email")
 def verify_email(token: str, db: Session = Depends(session)):
@@ -231,7 +246,7 @@ def resend_verification(body: EmailResend, request: Request, db: Session = Depen
     return {"message": "Если адрес ожидает подтверждения, письмо отправлено"}
 
 @app.post("/api/login")
-def login(creds: Credentials, request: Request, db: Session = Depends(session)):
+def login(creds: Credentials, request: Request, response: Response, db: Session = Depends(session)):
     email = str(creds.email).lower()
     auth_limit(request, db, "login", email, 12)
     user = db.scalar(select(User).where(User.email == email))
@@ -545,3 +560,8 @@ def cloud_state_recovery(version: int, user: User = Depends(current_user), db: S
 # Development/test convenience only. Production schema is managed by Alembic migrations.
 if ENVIRONMENT != 'production' and os.getenv('FREEDOM_MIGRATING') != '1':
     Base.metadata.create_all(engine)
+
+@app.post("/api/logout")
+def logout(response: Response):
+    response.delete_cookie("fr_session", path="/api", secure=ENVIRONMENT=="production", samesite="strict", httponly=True)
+    return {"ok": True}
