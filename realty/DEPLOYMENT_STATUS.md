@@ -27,3 +27,13 @@
 - Ни Blob token, ни API ключи не помещать в репозиторий, фронтенд или отчёты.
 - Закрытое хранилище подключено к Vercel через защищённую переменную `BLOB_READ_WRITE_TOKEN`.
 - Превышение бесплатных лимитов Vercel может повлечь расход, отслеживать usage.
+
+
+## Обновление основного адреса
+- Production deployment: `dpl_G4E5yM6EbkoUVbkSCMFw26V33sFz` — READY.
+- Подтверждено: домен `bloknot-rieltora-krasnodar.vercel.app` теперь указывает на этот deployment.
+- Проверено по хешам: оригинальные `data.js`, `app.js`, `core.js` перенесены без изменения.
+- Сохранены 1161 `window.SEED.properties`, 532 `window.SEED.pendingProperties`, 96 `window.SEED.sources` по read-only аудиту.
+- Добавлены `export-share.js` (native Android Share с fallback на старый экспорт), обновлён SW-cache, `/api/health` (проверяет наличие конфигурации хранилища, без записи).
+- Прежний production deployment: `dpl_5mjPXwMLF1tqwJhgem4bGmnkGee8` — возможный вариант отката.
+- **Не путать:** новый production не синхронизирует личные IndexedDB-записи между телефонами; сервер хранит лишь проверенную копию встроенного исходного каталога. Не заявлять, что двухсторонняя синхронизация готова.
