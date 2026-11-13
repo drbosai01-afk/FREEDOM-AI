@@ -63,6 +63,20 @@
     if(!r.ok)throw Error(typeof j.detail==='string'?j.detail:'Ошибка сервера '+r.status);
     return j;
   }
+  async function pushByChunks(data,expected_version){
+    const bytes=new TextEncoder().encode(JSON.stringify(data));
+    const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),b=>b.toString(16).padStart(2,'0')).join('');
+    const snapshot=await api('backups','POST',{size:bytes.length,sha256:digest});
+    const step=snapshot.chunk_bytes;
+    for(let i=0;i<bytes.length;i+=step){
+      const part=bytes.subarray(i,i+step);
+      const hex=Array.from(part,b=>b.toString(16).padStart(2,'0')).join('');
+      await api('backups/'+snapshot.id+'/chunks/'+Math.floor(i/step),'PUT',{hex_data:hex});
+      status('Передача на сервер: '+Math.floor((i+part.length)*100/bytes.length)+'%');
+    }
+    await api('backups/'+snapshot.id+'/verify','POST');
+    return api('sync/from-backup','POST',{snapshot_id:snapshot.id,expected_version});
+  }
   const ui=`<details id="freedom-cloud" style="position:fixed;bottom:84px;right:10px;z-index:9998;background:#fff;border:1px solid #8ea9ce;border-radius:14px;box-shadow:0 2px 14px #0002;padding:12px;max-width:min(94vw,380px);font:14px system-ui;color:#172b49">
     <summary style="font-weight:700;cursor:pointer">☁ FREEDOM — облако</summary>
     <p>Ручная синхронизация без удаления данных. Сначала войдите в облачный аккаунт.</p>
@@ -103,7 +117,7 @@
       if(remote.version && last!==remote.version)throw Error('В облаке другая версия. Сначала сравните и восстановите данные; загрузка отменена, чтобы не затереть чужие изменения.');
       const confirmText='Отправить полную локальную базу в аккаунт? '+JSON.stringify(n)+'; версия сервера '+remote.version+'. Если другие устройства меняли данные, сначала сравните.';
       if(!confirm(confirmText))return;
-      const j=await api('sync/state','PUT',{expected_version:remote.version,data:local,allow_shrink:false});
+      const j=await pushByChunks(local,remote.version);
       localStorage.setItem(baseKey(),String(j.version));status('Сохранено: версия '+j.version+', SHA-256 '+j.sha256);
     }catch(e){status(e.message)}
   };
