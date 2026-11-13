@@ -65,6 +65,14 @@ class Record(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
+class CatalogEntry(Base):
+    __tablename__ = "catalog_entries"
+    kind: Mapped[str] = mapped_column(String(24), primary_key=True)
+    record_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    data: Mapped[dict] = mapped_column(JSON, nullable=False)
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
 class EmailChallenge(Base):
     __tablename__ = "email_challenges"
     token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
