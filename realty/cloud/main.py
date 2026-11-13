@@ -90,18 +90,24 @@ def auth_limit(request: Request, db: Session, action: str, identity: str, max_pe
     # Only use the direct socket IP; forwarded headers are not trusted.
     ip = request.client.host if request.client else "unknown"
     actor = hashlib.sha256((ip + "|" + identity.lower() + "|" + action).encode()).hexdigest()
+    ip_actor = hashlib.sha256((ip + "|all|" + action).encode()).hexdigest()
     cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
-    # Production PostgreSQL serializes concurrent requests from the same IP+identity.
+    # PostgreSQL advisory locks make counters consistent even across server instances.
     if db.bind.dialect.name == "postgresql":
-        db.execute(select(func.pg_advisory_xact_lock(int(actor[:15], 16))))
+        for key in sorted({actor, ip_actor}):
+            db.execute(select(func.pg_advisory_xact_lock(int(key[:15], 16))))
     db.execute(delete(AuthAttempt).where(AuthAttempt.created_at < cutoff))
-    used = db.scalar(select(func.count()).select_from(AuthAttempt).where(
-        AuthAttempt.actor_hash == actor, AuthAttempt.action == action,
-        AuthAttempt.created_at >= cutoff))
-    if used >= max_per_hour:
-        db.rollback()
-        raise HTTPException(429, "Слишком много попыток. Повторите позже", headers={"Retry-After": "3600"})
-    db.add(AuthAttempt(actor_hash=actor, action=action, created_at=datetime.now(timezone.utc)))
+    for key, limit in ((actor, max_per_hour), (ip_actor, max(100, 50 * max_per_hour))):
+        used = db.scalar(select(func.count()).select_from(AuthAttempt).where(
+            AuthAttempt.actor_hash == key, AuthAttempt.action == action,
+            AuthAttempt.created_at >= cutoff))
+        if used >= limit:
+            db.rollback()
+            raise HTTPException(429, "Слишком много попыток. Повторите позже",
+                                headers={"Retry-After": "3600"})
+    now = datetime.now(timezone.utc)
+    db.add_all([AuthAttempt(actor_hash=key, action=action, created_at=now)
+                for key in {actor, ip_actor}])
     db.commit()
 
 def email_link(token: str):
@@ -330,10 +336,6 @@ def delete_record(kind: RecordType, record_id: str, version: int, user: User = D
     db.delete(item)
     db.commit()
     return {"deleted": True}
-
-@app.get("/api/health")
-def health():
-    return {"status": "ok"}
 
 @app.get("/")
 def home():
