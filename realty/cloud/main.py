@@ -1,15 +1,19 @@
 """FREEDOM REALTY cloud API. Each account sees only its own records."""
 import os
 import secrets
+import hashlib
+import smtplib
+from email.message import EmailMessage
+from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 import jwt
-from fastapi import Depends, FastAPI, HTTPException, Header, status
+from fastapi import Depends, FastAPI, HTTPException, Header, Request, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, EmailStr, Field
 from pwdlib import PasswordHash
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, UniqueConstraint, create_engine, select
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, UniqueConstraint, create_engine, select, delete, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 # In production, reject ephemeral storage and missing credentials: fail closed.
@@ -25,6 +29,8 @@ elif DATABASE_URL.startswith("postgresql://"):
 if ENVIRONMENT == "production" and not DATABASE_URL.startswith("postgresql+psycopg://"):
     raise RuntimeError("Only persistent PostgreSQL is permitted in production")
 JWT_SECRET = os.getenv("JWT_SECRET")
+if ENVIRONMENT == 'production' and JWT_SECRET and len(JWT_SECRET) < 48:
+    raise RuntimeError('JWT_SECRET must be at least 48 characters')
 if not JWT_SECRET:
     # Dev-only fallback; production must set JWT_SECRET and must not reuse ephemeral secrets.
     if ENVIRONMENT == "production":
@@ -45,6 +51,7 @@ class User(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
     password_digest: Mapped[str] = mapped_column(String(255))
+    email_verified: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 class Record(Base):
     __tablename__ = "records"
@@ -57,7 +64,69 @@ class Record(Base):
     version: Mapped[int] = mapped_column(Integer, default=1)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
-Base.metadata.create_all(engine)
+
+class EmailChallenge(Base):
+    __tablename__ = "email_challenges"
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+class AuthAttempt(Base):
+    __tablename__ = "auth_attempts"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    actor_hash: Mapped[str] = mapped_column(String(64), index=True)
+    action: Mapped[str] = mapped_column(String(20), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+def auth_limit(request: Request, db: Session, action: str, identity: str, max_per_hour: int):
+    # Only use the direct socket IP; forwarded headers are not trusted.
+    ip = request.client.host if request.client else "unknown"
+    actor = hashlib.sha256((ip + "|" + identity.lower() + "|" + action).encode()).hexdigest()
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
+    # Production PostgreSQL serializes concurrent requests from the same IP+identity.
+    if db.bind.dialect.name == "postgresql":
+        db.execute(select(func.pg_advisory_xact_lock(int(actor[:15], 16))))
+    db.execute(delete(AuthAttempt).where(AuthAttempt.created_at < cutoff))
+    used = db.scalar(select(func.count()).select_from(AuthAttempt).where(
+        AuthAttempt.actor_hash == actor, AuthAttempt.action == action,
+        AuthAttempt.created_at >= cutoff))
+    if used >= max_per_hour:
+        db.rollback()
+        raise HTTPException(429, "Слишком много попыток. Повторите позже", headers={"Retry-After": "3600"})
+    db.add(AuthAttempt(actor_hash=actor, action=action, created_at=datetime.now(timezone.utc)))
+    db.commit()
+
+def email_link(token: str):
+    origin = os.getenv("PUBLIC_BASE_URL", "")
+    if ENVIRONMENT == "production" and not origin.startswith("https://"):
+        raise RuntimeError("PUBLIC_BASE_URL must be HTTPS in production")
+    return origin.rstrip("/") + "/api/verify-email?token=" + quote(token)
+
+def send_activation(email: str, token: str):
+    if ENVIRONMENT != "production":
+        return
+    host, username, password, sender = (os.getenv("SMTP_HOST"), os.getenv("SMTP_USER"),
+                                        os.getenv("SMTP_PASSWORD"), os.getenv("SMTP_FROM"))
+    if not all((host, username, password, sender)):
+        raise RuntimeError("SMTP configuration required for verified registration")
+    msg = EmailMessage()
+    msg["Subject"] = "Подтвердите email для FREEDOM REALTY"
+    msg["From"] = sender
+    msg["To"] = email
+    msg.set_content("Для подтверждения адреса откройте ссылку (24 часа):\n" + email_link(token))
+    # TLS 1.2+ is handled by the standard SSL context.
+    import ssl
+    with smtplib.SMTP(host, int(os.getenv("SMTP_PORT", "587")), timeout=12) as smtp:
+        smtp.starttls(context=ssl.create_default_context())
+        smtp.login(username, password)
+        smtp.send_message(msg)
+
+def queue_activation(user: User, db: Session):
+    token = secrets.token_urlsafe(48)
+    db.add(EmailChallenge(token_hash=hashlib.sha256(token.encode()).hexdigest(),
+                          user_id=user.id, expires_at=datetime.now(timezone.utc) + timedelta(hours=24)))
+    db.commit()
+    send_activation(user.email, token)
 
 class Credentials(BaseModel):
     email: EmailStr
@@ -90,6 +159,8 @@ def current_user(authorization: str | None = Header(default=None), db: Session =
     user = db.get(User, uid)
     if user is None:
         raise HTTPException(401, "Пользователь не найден")
+    if not user.email_verified:
+        raise HTTPException(403, "Подтвердите email")
     return user
 
 def issue_token(user: User) -> dict:
@@ -97,12 +168,18 @@ def issue_token(user: User) -> dict:
     token = jwt.encode({"sub": str(user.id), "exp": expiry}, JWT_SECRET, algorithm="HS256")
     return {"access_token": token, "token_type": "bearer"}
 
+
 @app.post("/api/register", status_code=201)
-def register(creds: Credentials, db: Session = Depends(session)):
+def register(creds: Credentials, request: Request, db: Session = Depends(session)):
     email = str(creds.email).lower()
+    auth_limit(request, db, "register", email, 5)
     if db.scalar(select(User).where(User.email == email)):
+        # Never disclose whether an address has an account in production.
+        if ENVIRONMENT == "production":
+            return {"message": "Если адрес свободен, отправлено письмо с подтверждением"}
         raise HTTPException(409, "Этот email уже зарегистрирован")
-    user = User(email=email, password_digest=password_hash.hash(creds.password))
+    user = User(email=email, password_digest=password_hash.hash(creds.password),
+                email_verified=0 if ENVIRONMENT == "production" else 1)
     db.add(user)
     try:
         db.commit()
@@ -110,13 +187,58 @@ def register(creds: Credentials, db: Session = Depends(session)):
         db.rollback()
         raise HTTPException(409, "Не удалось создать аккаунт")
     db.refresh(user)
+    if ENVIRONMENT == "production":
+        try:
+            queue_activation(user, db)
+        except Exception:
+            # The user remains unverified. A resend is possible after SMTP is repaired.
+            raise HTTPException(503, "Отправка письма временно недоступна")
+        return {"message": "Проверьте почту и подтвердите email"}
     return issue_token(user)
 
+@app.get("/api/verify-email")
+def verify_email(token: str, db: Session = Depends(session)):
+    if len(token) < 40 or len(token) > 256:
+        raise HTTPException(400, "Неверная ссылка подтверждения")
+    hashed = hashlib.sha256(token.encode()).hexdigest()
+    row = db.get(EmailChallenge, hashed)
+    if row is None or row.expires_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
+        raise HTTPException(400, "Срок ссылки истёк или она уже использована")
+    user = db.get(User, row.user_id)
+    if user is None:
+        raise HTTPException(400, "Аккаунт не найден")
+    user.email_verified = 1
+    db.delete(row)
+    db.execute(delete(EmailChallenge).where(EmailChallenge.user_id == user.id))
+    db.commit()
+    return {"verified": True, "message": "Адрес подтверждён. Вернитесь к авторизации."}
+
+class EmailResend(BaseModel):
+    email: EmailStr
+
+@app.post("/api/resend-verification")
+def resend_verification(body: EmailResend, request: Request, db: Session = Depends(session)):
+    email = str(body.email).lower()
+    auth_limit(request, db, "resend", email, 3)
+    user = db.scalar(select(User).where(User.email == email))
+    if user and not user.email_verified and ENVIRONMENT == "production":
+        db.execute(delete(EmailChallenge).where(EmailChallenge.user_id == user.id))
+        db.commit()
+        try:
+            queue_activation(user, db)
+        except Exception:
+            raise HTTPException(503, "Почтовый сервер временно недоступен")
+    return {"message": "Если адрес ожидает подтверждения, письмо отправлено"}
+
 @app.post("/api/login")
-def login(creds: Credentials, db: Session = Depends(session)):
-    user = db.scalar(select(User).where(User.email == str(creds.email).lower()))
+def login(creds: Credentials, request: Request, db: Session = Depends(session)):
+    email = str(creds.email).lower()
+    auth_limit(request, db, "login", email, 12)
+    user = db.scalar(select(User).where(User.email == email))
     if not user or not password_hash.verify(creds.password, user.password_digest):
         raise HTTPException(401, "Неверный email или пароль")
+    if not user.email_verified:
+        raise HTTPException(403, "Подтвердите адрес электронной почты")
     return issue_token(user)
 
 @app.get("/api/me")
@@ -219,7 +341,6 @@ class SnapshotChunk(Base):
     part: Mapped[int] = mapped_column(Integer, primary_key=True)
     payload: Mapped[bytes] = mapped_column(LargeBinary)
 
-Base.metadata.create_all(engine)
 
 class SnapshotStart(BaseModel):
     size: int = Field(ge=2, le=MAX_BACKUP)
@@ -329,7 +450,6 @@ class CloudStateHistory(Base):
     packed: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     checksum: Mapped[str] = mapped_column(String(64), nullable=False)
 
-Base.metadata.create_all(engine)
 
 class CloudStateInput(BaseModel):
     expected_version: int = Field(ge=0)
@@ -421,3 +541,7 @@ def cloud_state_recovery(version: int, user: User = Depends(current_user), db: S
         raise HTTPException(404, "Предыдущая версия не найдена")
     return JSONResponse({"version": version, "data": decode_cloud_state(row.packed, row.checksum)},
                         headers={"Cache-Control": "no-store"})
+
+# Development/test convenience only. Production schema is managed by Alembic migrations.
+if ENVIRONMENT != 'production':
+    Base.metadata.create_all(engine)
