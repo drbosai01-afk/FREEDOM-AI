@@ -10,7 +10,7 @@ async function freedomIDB(){
 }
 async function freedomDBOp(store,mode,act){
  const db=await freedomIDB();
- try{return await new Promise((resolve,reject)=>{const tx=db.transaction(store,mode);const req=act(tx.objectStore(store));req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);tx.onabort=()=>reject(tx.error)})}
+ try{return await new Promise((resolve,reject)=>{const tx=db.transaction(store,mode);const req=act(tx.objectStore(store));let answer;req.onsuccess=()=>{answer=req.result};req.onerror=()=>reject(req.error);tx.oncomplete=()=>resolve(answer);tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error)})}
  finally{db.close()}
 }
 async function freedomNotify(type){
@@ -18,13 +18,14 @@ async function freedomNotify(type){
  for(const tab of tabs)tab.postMessage({type});
 }
 async function freedomSync(){
- const job=await freedomDBOp('jobs','readonly',s=>s.get('state'));
- if(!job)return;
  const me=await fetch('/api/me',{cache:'no-store',credentials:'same-origin'});
  if(me.status===401||me.status===403){await freedomNotify('FREEDOM_SYNC_NEEDED');return}
  if(!me.ok)throw Error('Account unavailable');
  const user=await me.json();
- if(user.id!==job.uid){await freedomNotify('FREEDOM_SYNC_CONFLICT');return}
+ const allowed=await freedomDBOp('meta','readonly',s=>s.get('enabled:'+user.id));
+ if(!allowed)return;
+ const job=await freedomDBOp('jobs','readonly',s=>s.get('state:'+user.id));
+ if(!job)return;
  const bytes=new TextEncoder().encode(JSON.stringify(job.data));
  const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),x=>x.toString(16).padStart(2,'0')).join('');
  async function post(path,method,body){
@@ -42,8 +43,12 @@ async function freedomSync(){
  await post('backups/'+upload.id+'/verify','POST',{});
  const result=await post('sync/from-backup','POST',{snapshot_id:upload.id,expected_version:job.expected_version});
  await freedomDBOp('meta','readwrite',s=>s.put(result.version,'base:'+job.uid));
- const pending=await freedomDBOp('jobs','readonly',s=>s.get('state'));
- if(pending?.id===job.id)await freedomDBOp('jobs','readwrite',s=>s.delete('state'));
+ const pending=await freedomDBOp('jobs','readonly',s=>s.get('state:'+user.id));
+ if(pending?.id===job.id)await freedomDBOp('jobs','readwrite',s=>s.delete('state:'+user.id));
+ else if(pending?.uid===user.id && pending.expected_version===job.expected_version){
+   pending.expected_version=result.version;
+   await freedomDBOp('jobs','readwrite',s=>s.put(pending,'state:'+user.id));
+ }
  await freedomNotify('FREEDOM_SYNC_DONE');
 }
 self.addEventListener('sync',event=>{if(event.tag==='freedom-realty-upload')event.waitUntil(freedomSync())});
