@@ -12,11 +12,22 @@ from pwdlib import PasswordHash
 from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, UniqueConstraint, create_engine, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./realty.db")
+# In production, reject ephemeral storage and missing credentials: fail closed.
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development").lower()
+configured_database = os.getenv("DATABASE_URL", "").strip()
+if ENVIRONMENT == "production" and not configured_database:
+    raise RuntimeError("DATABASE_URL (persistent PostgreSQL) is required in production")
+DATABASE_URL = configured_database or "sqlite:///./realty.db"
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = "postgresql+psycopg://" + DATABASE_URL[len("postgres://"):]
+elif DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = "postgresql+psycopg://" + DATABASE_URL[len("postgresql://"):]
+if ENVIRONMENT == "production" and not DATABASE_URL.startswith("postgresql+psycopg://"):
+    raise RuntimeError("Only persistent PostgreSQL is permitted in production")
 JWT_SECRET = os.getenv("JWT_SECRET")
 if not JWT_SECRET:
     # Dev-only fallback; production must set JWT_SECRET and must not reuse ephemeral secrets.
-    if os.getenv("ENVIRONMENT", "development") == "production":
+    if ENVIRONMENT == "production":
         raise RuntimeError("Set JWT_SECRET in production")
     JWT_SECRET = secrets.token_urlsafe(48)
 
