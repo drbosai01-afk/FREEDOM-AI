@@ -154,3 +154,37 @@ def test_sync_catalog_large_counts():
     loaded = client.get("/api/sync/state", headers=a)
     assert loaded.status_code == 200
     assert loaded.json()["data"] == value
+
+
+def test_alembic_upgrade_from_empty_database(tmp_path):
+    import subprocess
+    import sys
+    from pathlib import Path
+    dbfile = tmp_path / "migration-test.sqlite3"
+    env = os.environ.copy()
+    env["FREEDOM_MIGRATING"] = "1"
+    env["DATABASE_URL"] = "sqlite:///" + str(dbfile)
+    env["ENVIRONMENT"] = "test"
+    root = Path(__file__).resolve().parent.parent
+    result = subprocess.run([sys.executable, "-m", "alembic", "-c", "alembic.ini", "upgrade", "head"],
+                            cwd=str(root), env=env, capture_output=True, text=True, timeout=90)
+    assert result.returncode == 0, (result.stdout + result.stderr)[-1500:]
+    import sqlite3
+    with sqlite3.connect(dbfile) as conn:
+        present = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert {"users", "records", "cloud_states", "cloud_state_history",
+                "email_challenges", "auth_attempts", "alembic_version"}.issubset(present)
+        version = conn.execute("SELECT version_num FROM alembic_version").fetchone()[0]
+        assert version == "0001_initial"
+
+def test_invalid_activation_does_not_verify_account():
+    assert client.get("/api/verify-email", params={"token": "invalid" * 10}).status_code == 400
+
+def test_login_rate_limit_is_enforced():
+    email = "bruteforce_" + uuid.uuid4().hex + "@example.com"
+    for _ in range(12):
+        r = client.post("/api/login", json={"email": email, "password": "incorrect_password_2026"})
+        assert r.status_code == 401, r.text
+    blocked = client.post("/api/login", json={"email": email, "password": "incorrect_password_2026"})
+    assert blocked.status_code == 429
+    assert blocked.headers["retry-after"] == "3600"
