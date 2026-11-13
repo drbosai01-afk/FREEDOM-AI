@@ -95,7 +95,7 @@
   async function auth(mode){
     token='';
     const j=await api(mode,'POST',{email:el('fr-email').value.trim(),password:el('fr-pass').value});
-    token=j.access_token;accountEmail=el('fr-email').value.trim().toLowerCase();sessionStorage.setItem('freedom-realty-token',token);sessionStorage.setItem('fr-cloud-email',accountEmail);
+    if(!j.access_token){el('fr-pass').value='';status(j.message||'Подтвердите email для входа');return}token=j.access_token;accountEmail=el('fr-email').value.trim().toLowerCase();sessionStorage.setItem('freedom-realty-token',token);sessionStorage.setItem('fr-cloud-email',accountEmail);
     el('fr-pass').value='';status('Вход выполнен');
   }
   for(const [id,mode] of [['fr-login','login'],['fr-register','register']]){
