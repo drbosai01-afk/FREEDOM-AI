@@ -239,3 +239,36 @@ def test_chunked_sync_roundtrip_and_retry_safety():
     assert client.get("/api/sync/state",headers=user).json()["data"] == full
     assert client.post("/api/sync/from-backup",headers=user,json={
         "snapshot_id":sid,"expected_version":0}).status_code == 409
+
+
+def test_health_is_not_ready_without_production_postgres():
+    result = client.get("/api/health")
+    assert result.status_code == 503
+    assert result.json()["ready"] is False
+    assert result.headers["cache-control"] == "no-store"
+
+def test_catalog_import_is_dry_run_and_non_destructive(tmp_path):
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+    seed = {
+        "properties": [{"id": "p_"+str(i)} for i in range(1161)],
+        "pendingProperties": [{"id": "q_"+str(i)} for i in range(532)],
+        "sources": [{"id": "s_"+str(i)} for i in range(96)]
+    }
+    source = tmp_path / "synthetic-only.json"
+    source.write_text(json.dumps(seed), encoding="utf-8")
+    root = Path(__file__).resolve().parent.parent
+    p = subprocess.run([sys.executable, "-m", "scripts.import_catalog", str(source)],
+                       cwd=str(root), capture_output=True, text=True, timeout=45)
+    assert p.returncode == 0, p.stderr
+    info = json.loads(p.stdout)
+    assert info["dry_run"] is True
+    assert info["counts"] == {"property":1161, "pending":532, "source":96}
+    # Duplicate IDs are rejected without touching the database.
+    seed["properties"][1]["id"] = seed["properties"][0]["id"]
+    source.write_text(json.dumps(seed), encoding="utf-8")
+    bad = subprocess.run([sys.executable, "-m", "scripts.import_catalog", str(source)],
+                         cwd=str(root), capture_output=True, text=True, timeout=45)
+    assert bad.returncode != 0
