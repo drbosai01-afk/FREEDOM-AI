@@ -280,7 +280,7 @@ def test_production_login_sets_httponly_cookie_and_enforces_origin(monkeypatch):
     account(email)
     monkeypatch.setattr(main, "ENVIRONMENT", "production")
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://freedom-realty.example")
-    isolated = TestClient(main.app)
+    isolated = TestClient(main.app, base_url="https://freedom-realty.example")
     login = isolated.post("/api/login", json={"email": email, "password": "secure_password_2026"})
     assert login.status_code == 200, login.text
     cookie = login.headers["set-cookie"].lower()
