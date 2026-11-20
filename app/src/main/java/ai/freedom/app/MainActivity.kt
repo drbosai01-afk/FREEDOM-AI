@@ -2,8 +2,10 @@ package ai.freedom.app
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.graphics.Color
+import android.net.Uri
 import android.os.Bundle
 import android.speech.RecognizerIntent
 import android.text.InputType
@@ -62,6 +64,10 @@ class MainActivity : Activity() {
             text = "Подключить ИИ / отключить"
             setOnClickListener { showAISettings() }
         })
+        root.addView(Button(this).apply {
+            text = "Чат-продавец"
+            setOnClickListener { openSalesChat() }
+        })
         val scroll = ScrollView(this)
         transcript = TextView(this).apply {
             text = "FREEDOM: Привет! Чтобы получить настоящие ответы, подключи ИИ в настройках. Сетевой ИИ использует отдельный API-ключ и может тарифицироваться провайдером.\n"
@@ -92,6 +98,15 @@ class MainActivity : Activity() {
         sendButton.setOnClickListener { sendMessage() }
         voice.setOnClickListener { launchSpeech() }
         file.setOnClickListener { chooseFile() }
+    }
+
+    private fun openSalesChat() {
+        val address = Uri.parse("https://freedom-chat-realty.drb-os.chatgpt.site/start")
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, address).addCategory(Intent.CATEGORY_BROWSABLE))
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(this, "Откройте FREEDOM Chat в браузере", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun showAISettings() {
