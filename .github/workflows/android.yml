@@ -1,0 +1,62 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main, feature/freedom-foundation]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      # GitHub Ubuntu runners include Android SDK command-line tools.
+      # setup-android@v3 currently fails while requesting removed SDK package "tools".
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Install Android SDK 35
+        run: |
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
+      - name: Run tests and build
+        run: gradle :core:test :app:testDebugUnitTest :app:assembleDebug --no-daemon --stacktrace
+      - name: Verify APK permissions and record digest
+        run: |
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          AAPT="$SDK_ROOT/build-tools/35.0.0/aapt"
+          APKSIGNER="$SDK_ROOT/build-tools/35.0.0/apksigner"
+          test -x "$AAPT"
+          test -x "$APKSIGNER"
+          "$APKSIGNER" verify --verbose "$APK"
+          "$AAPT" dump permissions "$APK" | tee /tmp/freedom-permissions.txt
+          # The current prototype must only declare INTERNET.
+          grep -F 'android.permission.INTERNET' /tmp/freedom-permissions.txt
+          if grep -E 'android.permission.(READ_|WRITE_|MANAGE_|BIND_|RECORD_AUDIO|CAMERA|QUERY_ALL_PACKAGES|ACCESSIBILITY)' /tmp/freedom-permissions.txt; then
+            echo "Unexpected sensitive permission in APK" >&2
+            exit 1
+          fi
+          sha256sum "$APK"
+      - name: Upload debug APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FREEDOM-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
