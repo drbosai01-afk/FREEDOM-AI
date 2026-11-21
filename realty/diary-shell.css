@@ -1,0 +1,36 @@
+/* Дневник риелтора — blue, accessible, mobile-first shell */
+:root{--diary-blue:#0758aa;--diary-navy:#093562;--diary-light:#eaf3ff}
+body{background:#edf5ff!important;padding-top:64px!important;padding-bottom:84px!important}
+#shell{min-height:calc(100dvh - 148px)}
+.diary-bar{position:fixed;top:0;left:0;right:0;height:64px;z-index:9100;background:linear-gradient(105deg,#07335f,#076bc5);color:white;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px max(14px,env(safe-area-inset-left));box-shadow:0 3px 13px #003f8033}
+.diary-brand{display:flex;gap:10px;align-items:center;min-width:0}.diary-brand strong{font:750 16px/1.2 system-ui,sans-serif;white-space:nowrap}.diary-brand small{display:block;font:400 10px/1.4 system-ui,sans-serif;color:#d2eaff}.diary-symbol{background:white;color:#0758aa;border-radius:11px;display:grid;place-items:center;width:39px;height:39px;font:800 24px/1 system-ui,sans-serif}
+.diary-bar-actions{display:flex;gap:7px;align-items:center}.diary-bar button{background:#ffffff1f;border:1px solid #ffffff55;color:white;border-radius:10px;min-height:40px;padding:8px 11px;font:650 12px system-ui,sans-serif;cursor:pointer}
+#diary-menu-button{min-width:43px;font-size:20px}
+.diary-dock{position:fixed;bottom:0;left:0;right:0;z-index:9050;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));padding:7px max(5px,env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom));background:#fff;border-top:1px solid #bcd5ed;box-shadow:0 -4px 14px #07386614;gap:3px}
+.diary-dock button{border:0;border-radius:12px;background:transparent;color:#436482;min-width:0;min-height:51px;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:1px;cursor:pointer}
+.diary-dock button span{font:700 23px/1 system-ui}.diary-dock button small{font:650 10px/1.5 system-ui}.diary-dock button.diary-selected{background:#e6f2ff;color:#0758aa}
+.diary-shade{position:fixed;inset:0;z-index:9400;background:#071c35a6;backdrop-filter:blur(2px)}
+.diary-shade[hidden],.diary-drawer[hidden]{display:none!important}
+.diary-drawer{position:fixed;z-index:9500;top:0;right:0;bottom:0;width:min(355px,90vw);background:#f4f9ff;box-shadow:-9px 0 35px #001b4566;display:flex;flex-direction:column;overflow:hidden;color:#163b61}
+.diary-drawer-top{background:linear-gradient(120deg,#073562,#0869c5);color:#fff;padding:24px 17px 19px;display:flex;align-items:center;justify-content:space-between;gap:10px}
+.diary-drawer-top strong{font:750 20px system-ui}.diary-drawer-top small{display:block;color:#c7e4ff;font:400 12px system-ui}
+.diary-drawer-top button{border:1px solid #ffffff55;background:#ffffff1e;border-radius:10px;color:white;min-width:42px;min-height:42px;font-size:18px}
+.diary-drawer-list{overflow-y:auto;flex:1;display:grid;align-content:start;gap:4px;padding:12px}
+.diary-drawer-list button{display:flex;gap:13px;align-items:center;text-align:left;background:#fff;border:1px solid #d5e6f6;color:#184c7d;border-radius:11px;min-height:49px;padding:7px 12px;font:650 14px system-ui;cursor:pointer}
+.diary-drawer-list button.diary-selected{background:#dceeff;border-color:#80b8ed;color:#064c94}
+.diary-icon{display:grid;place-items:center;width:31px;height:31px;background:#e8f3ff;border-radius:8px;color:#0758aa;font-size:19px}
+.diary-drawer-foot{padding:13px 17px 20px;background:#eaf4ff;color:#5e748a;font:12px/1.4 system-ui}.diary-drawer-foot p{margin:6px 0 0}
+#diary-online{color:#087e62;font-weight:700}
+.diary-install-dialog{border:0;border-radius:18px;max-width:min(430px,92vw);padding:22px;color:#173b61;box-shadow:0 16px 55px #082a4b66}.diary-install-dialog::backdrop{background:#031b37a0}.diary-install-dialog h2{font-size:20px}.diary-install-dialog p{line-height:1.5}.diary-install-dialog button{background:#0758aa;color:#fff;border:0;border-radius:10px;min-height:44px;padding:10px 22px}
+#bottom{display:none!important}
+#fr-launch{bottom:91px!important}
+#fr-agent-desk{z-index:9300!important}
+#fr-agent-desk .fr-head{padding-top:calc(12px + env(safe-area-inset-top))}
+body.fr-open .diary-bar,body.fr-open .diary-dock{display:none!important}
+body.fr-open{padding-top:0!important}
+#sidebar{top:64px}
+#main .panel,#main .card,#main .stat{border-color:#d0e3f6}
+#main .stat strong{color:#0758aa}
+#topbar{border-bottom-color:#bcd6ef}
+@media(max-width:420px){.diary-brand strong{font-size:14px}.diary-brand small{font-size:9px}.diary-bar{padding:8px 10px}.diary-symbol{width:35px;height:35px}.diary-bar-actions button{padding:7px 8px}}
+@media(min-width:900px){body{padding-top:70px!important}.diary-bar{height:70px;padding:10px 28px}.diary-dock{left:auto;right:20px;bottom:20px;width:460px;border:1px solid #c8def2;border-radius:17px;padding:7px;box-shadow:0 5px 22px #11396322}}
