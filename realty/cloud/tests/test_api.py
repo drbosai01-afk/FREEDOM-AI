@@ -272,3 +272,25 @@ def test_catalog_import_is_dry_run_and_non_destructive(tmp_path):
     bad = subprocess.run([sys.executable, "-m", "scripts.import_catalog", str(source)],
                          cwd=str(root), capture_output=True, text=True, timeout=45)
     assert bad.returncode != 0
+
+
+def test_production_login_sets_httponly_cookie_and_enforces_origin(monkeypatch):
+    import main
+    email = "cookie_" + uuid.uuid4().hex + "@example.com"
+    account(email)
+    monkeypatch.setattr(main, "ENVIRONMENT", "production")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://freedom-realty.example")
+    isolated = TestClient(main.app, base_url="https://freedom-realty.example")
+    login = isolated.post("/api/login", json={"email": email, "password": "secure_password_2026"})
+    assert login.status_code == 200, login.text
+    cookie = login.headers["set-cookie"].lower()
+    assert "fr_session=" in cookie
+    assert "httponly" in cookie and "secure" in cookie and "samesite=strict" in cookie
+    assert isolated.get("/api/me").status_code == 200
+    payload = {"record_id": "cookie_example", "version": 0, "data": {"title": "Test"}}
+    assert isolated.put("/api/records/properties", json=payload).status_code == 403
+    assert isolated.put("/api/records/properties", json=payload, headers={
+        "Origin": "https://freedom-realty.example"}).status_code == 200
+    logged_out = isolated.post("/api/logout")
+    assert logged_out.status_code == 200
+    assert isolated.get("/api/me").status_code == 401

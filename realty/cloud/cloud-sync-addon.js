@@ -8,7 +8,7 @@
   const API = '/api/';
   const FIELDS = ['properties','queue','clients','collections','notes','showings','sources'];
   const el = (name) => document.getElementById(name);
-  let token = sessionStorage.getItem('freedom-realty-token') || '';
+  let token = '';
   let remote = null;
   let local = null;
   let accountEmail = '';
@@ -95,7 +95,7 @@
   async function auth(mode){
     token='';
     const j=await api(mode,'POST',{email:el('fr-email').value.trim(),password:el('fr-pass').value});
-    if(!j.access_token){el('fr-pass').value='';status(j.message||'Подтвердите email для входа');return}token=j.access_token;accountEmail=el('fr-email').value.trim().toLowerCase();sessionStorage.setItem('freedom-realty-token',token);sessionStorage.setItem('fr-cloud-email',accountEmail);
+    if(!j.access_token){el('fr-pass').value='';status(j.message||'Подтвердите email для входа');return}token=location.hostname==='localhost'||location.hostname==='127.0.0.1'?j.access_token:'';accountEmail=el('fr-email').value.trim().toLowerCase();sessionStorage.removeItem('freedom-realty-token');sessionStorage.setItem('fr-cloud-email',accountEmail);
     el('fr-pass').value='';status('Вход выполнен');
   }
   for(const [id,mode] of [['fr-login','login'],['fr-register','register']]){
@@ -110,7 +110,7 @@
   };
   el('fr-upload').onclick=async()=>{
     try {
-      if(!token)throw Error('Сначала войдите');
+      if(!(await api('me')).id)throw Error('Сначала войдите');
       local=await readState(); remote=await api('sync/state');
       const n=counts(local);
       const last=Number(localStorage.getItem(baseKey()) || 0);
@@ -123,7 +123,7 @@
   };
   el('fr-restore').onclick=async()=>{
     try {
-      if(!token)throw Error('Сначала войдите');
+      if(!(await api('me')).id)throw Error('Сначала войдите');
       local=await readState();remote=await api('sync/state');
       if(!remote.data)throw Error('На сервере нет базы');
       valid(remote.data);

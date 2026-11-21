@@ -268,7 +268,7 @@ def login(creds: Credentials, request: Request, response: Response, db: Session 
         raise HTTPException(401, "Неверный email или пароль")
     if not user.email_verified:
         raise HTTPException(403, "Подтвердите адрес электронной почты")
-    return issue_token(user)
+    return issue_token(user, response)
 
 @app.get("/api/me")
 def me(user: User = Depends(current_user)):
