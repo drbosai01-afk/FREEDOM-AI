@@ -1,0 +1,4 @@
+freedom.db
+freedom.db-*
+__pycache__/
+.env
