@@ -11,7 +11,7 @@
       "visibility": "private"
     }
   },
-  "postStartCommand": "bash -lc 'cd freedom_cloud && (pgrep -f \"[p]ython3 server.py\" >/dev/null || nohup python3 server.py >/tmp/freedom-cloud.log 2>&1 </dev/null &)'",
+  "postStartCommand": "bash -lc 'cd /workspaces/FREEDOM-AI && nohup python3 freedom_cloud/server.py >/tmp/freedom-cloud.log 2>&1 </dev/null &'",
   "customizations": {
     "vscode": {
       "settings": {
