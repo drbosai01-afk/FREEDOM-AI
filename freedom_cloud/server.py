@@ -19,7 +19,18 @@ def ask(prompt):
     try:
         with urllib.request.urlopen(req,timeout=50) as r: data=json.load(r)
     except urllib.error.HTTPError as err:
-        raise RuntimeError("Ошибка OpenAI HTTP "+str(err.code)+". Проверьте API-баланс, ключ и права модели.") from None
+        try:
+            details=json.loads(err.read().decode("utf-8")).get("error",{})
+            code=details.get("code") or details.get("type") or "unknown"
+        except Exception:
+            code="unknown"
+        if err.code==429 and code=="insufficient_quota":
+            reason="Закончился баланс API или достигнут лимит расходов. Проверьте Billing в OpenAI Platform."
+        elif err.code==429:
+            reason="Ограничение API-запросов. Код причины: "+str(code)+". Проверьте Limits в OpenAI Platform."
+        else:
+            reason="Код причины: "+str(code)+". Проверьте настройки API."
+        raise RuntimeError("OpenAI HTTP "+str(err.code)+": "+reason) from None
     parts=[part.get("text","") for item in data.get("output",[]) for part in item.get("content",[]) if part.get("type")=="output_text"]
     return "\n".join(parts).strip() or "Модель не вернула текст."
 PAGE=r'''<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FREEDOM</title><style>body{background:#101621;color:#e8edf4;font:16px system-ui;margin:auto;max-width:750px;padding:20px}header{font-size:27px;font-weight:750;margin:15px 0}small{color:#9daec7}.card{background:#1b2637;border-radius:15px;padding:16px;margin:12px 0;white-space:pre-wrap}textarea{width:100%;box-sizing:border-box;background:#202d40;color:white;border:1px solid #60718b;border-radius:12px;padding:14px;font:16px system-ui;min-height:100px}button{background:#70a8ff;border:0;border-radius:10px;padding:14px 22px;font-weight:bold;font-size:16px}#status{color:#c3d4ea;margin:15px 0}</style><header>FREEDOM</header><small>Облачная тестовая версия · реальный API · память SQLite</small><div id="status">Проверка подключения...</div><div id="log"></div><textarea id="prompt" placeholder="Напиши задачу FREEDOM"></textarea><p><button id="send" onclick="send()">Отправить</button></p><script>async function send(){const q=document.querySelector('#prompt').value.trim();if(!q)return;const b=document.querySelector('#send');b.disabled=true;document.querySelector('#status').textContent='Обработка...';try{const r=await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:q})});const d=await r.json();const node=document.createElement('div');node.className='card';node.textContent='Вы: '+q+'\n\nFREEDOM: '+(d.answer||d.error);document.querySelector('#log').prepend(node);document.querySelector('#status').textContent=r.ok?'Готово':'Ошибка';}catch(e){document.querySelector('#status').textContent=String(e)}finally{b.disabled=false}}fetch('/api/health').then(x=>x.json()).then(d=>document.querySelector('#status').textContent=d.key_configured?'API-ключ найден. Можно отправить задачу.':'API-ключ пока не найден в окружении Codespaces.');</script></html>'''
