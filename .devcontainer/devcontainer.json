@@ -1,0 +1,22 @@
+{
+  "name": "FREEDOM Cloud",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12",
+  "forwardPorts": [
+    8765
+  ],
+  "portsAttributes": {
+    "8765": {
+      "label": "FREEDOM",
+      "onAutoForward": "openBrowser",
+      "visibility": "private"
+    }
+  },
+  "postStartCommand": "bash -lc 'cd freedom_cloud && (pgrep -f \"[p]ython3 server.py\" >/dev/null || nohup python3 server.py >/tmp/freedom-cloud.log 2>&1 </dev/null &)'",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  }
+}
